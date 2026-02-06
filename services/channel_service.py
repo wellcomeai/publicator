@@ -5,6 +5,7 @@ import structlog
 from typing import Dict, Any, Optional, List
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto, InputMediaVideo, InputMediaAnimation
+from utils.html_sanitizer import sanitize_html
 
 logger = structlog.get_logger()
 
@@ -38,9 +39,10 @@ async def verify_bot_is_admin(bot: Bot, channel_id: int) -> Dict[str, Any]:
 
 
 async def _send_long_text(bot: Bot, channel_id: int, text: str, parse_mode: str = "HTML") -> Any:
-    """
-    Отправка длинного текста с разбиением на части (если > 4096 символов).
-    """
+    """Отправка длинного текста с разбиением на части (если > 4096 символов)."""
+    if parse_mode == "HTML":
+        text = sanitize_html(text)
+
     if len(text) <= MESSAGE_MAX_LENGTH:
         return await bot.send_message(channel_id, text, parse_mode=parse_mode)
 
@@ -70,23 +72,21 @@ async def publish_post(
     """
     Опубликовать пост в канал.
     
-    Если caption > 1024 символов — медиа отправляется без подписи,
-    текст отправляется отдельным сообщением.
-    
-    media_info format:
-    - Single: {"type": "photo", "file_id": "...", "caption": "..."} 
-    - Album: {"type": "album", "items": [{"type": "photo", "file_id": "..."}, ...]}
+    Если caption > 1024 символов — медиа без подписи, текст отдельно.
+    Если текст > 4096 — разбивается на части.
+    HTML санитизируется перед отправкой.
     """
     try:
+        # Санитизация
+        text = sanitize_html(text)
+
         if not media_info:
-            # Текстовый пост
             msg = await _send_long_text(bot, channel_id, text)
             return {"success": True, "message_id": msg.message_id}
         
         media_type = media_info.get("type")
         
         if media_type == "album":
-            # Медиаальбом
             return await _publish_album(bot, channel_id, text, media_info)
         
         # === ОДИНОЧНЫЕ МЕДИА ===
@@ -102,7 +102,6 @@ async def publish_post(
             method = getattr(bot, method_name)
             
             if len(text) <= CAPTION_MAX_LENGTH:
-                # Caption влезает — отправляем медиа с подписью
                 msg = await method(
                     channel_id,
                     **{param_name: media_info["file_id"]},
@@ -111,15 +110,12 @@ async def publish_post(
                 )
                 return {"success": True, "message_id": msg.message_id}
             else:
-                # Caption слишком длинный — медиа без подписи, текст отдельно
-                await method(
-                    channel_id,
-                    **{param_name: media_info["file_id"]},
-                )
+                # Медиа без подписи + текст отдельно
+                await method(channel_id, **{param_name: media_info["file_id"]})
                 msg = await _send_long_text(bot, channel_id, text)
                 return {"success": True, "message_id": msg.message_id}
         
-        # Неизвестный тип медиа — отправляем только текст
+        # Неизвестный тип — только текст
         logger.warning("⚠️ Unknown media type, sending text only", media_type=media_type)
         msg = await _send_long_text(bot, channel_id, text)
         return {"success": True, "message_id": msg.message_id}
@@ -147,7 +143,6 @@ async def _publish_album(
         for i, item in enumerate(items):
             item_type = item.get("type", "photo")
             file_id = item["file_id"]
-            # Подпись только к первому элементу и только если влезает
             cap = caption_text if (i == 0 and use_caption) else None
             
             if item_type == "photo":
@@ -168,7 +163,7 @@ async def _publish_album(
         
         messages = await bot.send_media_group(channel_id, media_group)
         
-        # Если caption не влез — отправляем текст отдельным сообщением
+        # Текст отдельно если не влез в caption
         if not use_caption:
             await _send_long_text(bot, channel_id, caption_text)
         
