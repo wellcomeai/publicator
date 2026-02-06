@@ -3,6 +3,7 @@
 FastAPI + aiogram webhook + Robokassa callbacks
 """
 
+import asyncio
 import structlog
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
@@ -15,6 +16,7 @@ from config.settings import config
 from database.db import init_db, close_db
 from database.managers.user_manager import UserManager
 from database.managers.payment_manager import PaymentManager
+from utils.album_buffer import add_to_buffer, flush_buffer, store_album, ALBUM_WAIT_SECONDS
 
 # Handlers
 from bot.handlers import (
@@ -46,8 +48,36 @@ dp.include_router(content_handler.router)
 dp.include_router(profile_handler.router)
 dp.include_router(payment_handler.router)
 
-# Album middleware — собирает медиагруппы в один батч
+# Album middleware — достаёт собранный альбом из буфера
 content_handler.router.message.middleware(AlbumMiddleware())
+
+
+# ===== ALBUM PROCESSING =====
+
+async def _process_album_delayed(media_group_id: str):
+    """
+    Фоновая задача: ждёт сбора всех сообщений альбома,
+    затем подаёт первый update в dispatcher с собранным альбомом в буфере.
+    """
+    await asyncio.sleep(ALBUM_WAIT_SECONDS)
+
+    messages = flush_buffer(media_group_id)
+    if not messages:
+        return
+
+    # Сохраняем собранный альбом — middleware заберёт его
+    store_album(media_group_id, messages)
+
+    # Подаём первое сообщение как update в dispatcher
+    first_message = messages[0]
+    fake_update = Update(update_id=0, message=first_message)
+
+    try:
+        await dp.feed_update(bot, fake_update)
+    except Exception as e:
+        logger.error("❌ Album processing failed",
+                     media_group_id=media_group_id,
+                     error=str(e))
 
 
 # ===== FASTAPI LIFESPAN =====
@@ -88,6 +118,22 @@ async def webhook(request: Request):
 
     data = await request.json()
     update = Update(**data)
+
+    # === БУФЕРИЗАЦИЯ АЛЬБОМОВ ===
+    # Если сообщение — часть медиагруппы, буферизуем его и сразу возвращаем 200.
+    # Обработка произойдёт через фоновую задачу после сбора всех элементов.
+    if update.message and update.message.media_group_id:
+        group_id = update.message.media_group_id
+        is_first = add_to_buffer(group_id, update.message)
+
+        if is_first:
+            # Запускаем отложенную обработку (только для первого сообщения группы)
+            asyncio.create_task(_process_album_delayed(group_id))
+
+        # Мгновенный ответ Telegram — не блокируем webhook
+        return Response(status_code=200)
+
+    # Обычные сообщения — обрабатываем как раньше
     await dp.feed_update(bot, update)
     return Response(status_code=200)
 
