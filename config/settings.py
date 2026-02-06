@@ -31,7 +31,7 @@ class Config:
 
     # Settings
     TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "3"))
-    SUBSCRIPTION_PRICE_RUB = int(os.getenv("SUBSCRIPTION_PRICE_RUB", "1"))
+    SUBSCRIPTION_PRICE_RUB = int(os.getenv("SUBSCRIPTION_PRICE_RUB", "10"))
     DEFAULT_TOKEN_LIMIT = int(os.getenv("DEFAULT_TOKEN_LIMIT", "100000"))
 
     # Token packages (tokens: price_rub)
