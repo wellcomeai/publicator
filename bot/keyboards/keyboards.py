@@ -8,36 +8,47 @@ from aiogram.types import (
 
 # ===== ГЛАВНОЕ МЕНЮ =====
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="✍️ Создать пост"), KeyboardButton(text="🔄 Рерайт поста")],
-            [KeyboardButton(text="🤖 Мой агент"), KeyboardButton(text="📢 Мой канал")],
-            [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="💳 Подписка")],
-        ],
-        resize_keyboard=True,
-    )
+def main_menu_kb(show_schedule: bool = False) -> ReplyKeyboardMarkup:
+    """Главное меню. show_schedule=True для тарифа Про."""
+    keyboard = [
+        [KeyboardButton(text="✍️ Создать пост"), KeyboardButton(text="🔄 Рерайт поста")],
+        [KeyboardButton(text="🤖 Мой агент"), KeyboardButton(text="📢 Мой канал")],
+    ]
+    if show_schedule:
+        keyboard.append([KeyboardButton(text="📅 Расписание"), KeyboardButton(text="👤 Профиль")])
+    else:
+        keyboard.append([KeyboardButton(text="👤 Профиль")])
+    keyboard.append([KeyboardButton(text="💳 Подписка")])
+
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 # ===== ДЕЙСТВИЯ С ПОСТОМ =====
 
-def post_actions_kb(post_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📢 Опубликовать", callback_data=f"publish:{post_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit:{post_id}"),
-            InlineKeyboardButton(text="🖼 Медиа", callback_data=f"media:{post_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="🔄 Похожий", callback_data=f"clone:{post_id}"),
-            InlineKeyboardButton(text="🔄 Заново", callback_data=f"regenerate:{post_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="🗑 Отменить", callback_data=f"discard:{post_id}"),
-        ],
+def post_actions_kb(post_id: int, can_schedule: bool = False) -> InlineKeyboardMarkup:
+    """Клавиатура действий с постом. can_schedule=True для тарифа Про."""
+    buttons = [
+        [InlineKeyboardButton(text="📢 Опубликовать", callback_data=f"publish:{post_id}")],
+    ]
+
+    if can_schedule:
+        buttons.append([
+            InlineKeyboardButton(text="📅 Запланировать", callback_data=f"schedule:{post_id}")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit:{post_id}"),
+        InlineKeyboardButton(text="🖼 Медиа", callback_data=f"media:{post_id}"),
     ])
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Похожий", callback_data=f"clone:{post_id}"),
+        InlineKeyboardButton(text="🔄 Заново", callback_data=f"regenerate:{post_id}"),
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🗑 Отменить", callback_data=f"discard:{post_id}"),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ===== АГЕНТ =====
@@ -79,7 +90,9 @@ def channel_menu_kb(has_channel: bool) -> InlineKeyboardMarkup:
 
 def subscription_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Подписка — 300₽/мес", callback_data="pay:subscription")],
+        [InlineKeyboardButton(text="⭐ Стартер — 100₽/мес", callback_data="pay:plan:starter")],
+        [InlineKeyboardButton(text="🚀 Про — 300₽/мес", callback_data="pay:plan:pro")],
+        [InlineKeyboardButton(text="━━━ Пакеты токенов ━━━", callback_data="noop")],
         [InlineKeyboardButton(text="🪙 50K токенов — 100₽", callback_data="pay:tokens:50000")],
         [InlineKeyboardButton(text="🪙 150K токенов — 250₽", callback_data="pay:tokens:150000")],
         [InlineKeyboardButton(text="🪙 500K токенов — 700₽", callback_data="pay:tokens:500000")],
@@ -160,6 +173,64 @@ def profile_settings_kb(auto_cover: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=cover_text, callback_data="toggle_auto_cover")],
     ])
+
+
+# ===== ОНБОРДИНГ =====
+
+def preset_choice_kb() -> InlineKeyboardMarkup:
+    """Клавиатура выбора пресета агента"""
+    from config.presets import AGENT_PRESETS
+    buttons = []
+    for key, preset in AGENT_PRESETS.items():
+        buttons.append([InlineKeyboardButton(
+            text=f"{preset['emoji']} {preset['name']}",
+            callback_data=f"preset:{key}"
+        )])
+    buttons.append([InlineKeyboardButton(text="✏️ Свой вариант", callback_data="preset:custom")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def onboarding_channel_kb() -> InlineKeyboardMarkup:
+    """Кнопка пропуска привязки канала"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="onboard:skip_channel")]
+    ])
+
+
+def onboarding_first_post_kb() -> InlineKeyboardMarkup:
+    """Кнопки после завершения онбординга"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Создать первый пост", callback_data="onboard:first_post")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="onboard:to_menu")],
+    ])
+
+
+# ===== РАСПИСАНИЕ =====
+
+def schedule_time_presets_kb(post_id: int) -> InlineKeyboardMarkup:
+    """Быстрые варианты времени"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⏰ Через 1 час", callback_data=f"sched_quick:1h:{post_id}"),
+            InlineKeyboardButton(text="⏰ Через 3 часа", callback_data=f"sched_quick:3h:{post_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🌅 Завтра 10:00", callback_data=f"sched_quick:tomorrow_10:{post_id}"),
+            InlineKeyboardButton(text="🌆 Завтра 18:00", callback_data=f"sched_quick:tomorrow_18:{post_id}"),
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+    ])
+
+
+def scheduled_list_kb(scheduled_items: list) -> InlineKeyboardMarkup:
+    """Кнопки отмены запланированных постов"""
+    buttons = []
+    for item in scheduled_items[:5]:
+        buttons.append([InlineKeyboardButton(
+            text=f"❌ Отменить #{item['id']}",
+            callback_data=f"sched_cancel:{item['id']}"
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ===== ОТМЕНА =====

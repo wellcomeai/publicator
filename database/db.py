@@ -44,17 +44,22 @@ async def _create_tables():
             chat_id BIGINT UNIQUE NOT NULL,
             username VARCHAR(255),
             first_name VARCHAR(255),
-            
+
             -- Подписка
             is_subscribed BOOLEAN DEFAULT FALSE,
             trial_started_at TIMESTAMPTZ,
             trial_expires_at TIMESTAMPTZ,
             subscription_expires_at TIMESTAMPTZ,
-            
+
+            -- Freemium
+            plan VARCHAR(20) DEFAULT 'free',
+            posts_this_month INT DEFAULT 0,
+            month_reset_at TIMESTAMPTZ,
+
             -- Токены
             tokens_balance INT DEFAULT 0,
             tokens_used_total INT DEFAULT 0,
-            
+
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
@@ -118,17 +123,18 @@ async def _create_tables():
             id SERIAL PRIMARY KEY,
             user_id INT REFERENCES users(id) ON DELETE CASCADE,
             amount_rub INT NOT NULL,
-            
+
             -- subscription / tokens
             payment_type VARCHAR(30) NOT NULL,
             tokens_amount INT DEFAULT 0,
-            
+            plan VARCHAR(20),
+
             -- pending / success / fail
             status VARCHAR(20) DEFAULT 'pending',
-            
+
             robokassa_inv_id INT,
             robokassa_data JSONB,
-            
+
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
@@ -155,6 +161,19 @@ async def _create_tables():
             UNIQUE(user_id)
         );
 
+        -- Отложенные посты
+        CREATE TABLE IF NOT EXISTS scheduled_posts (
+            id SERIAL PRIMARY KEY,
+            post_id INT REFERENCES posts(id) ON DELETE CASCADE,
+            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            channel_id BIGINT NOT NULL,
+            scheduled_at TIMESTAMPTZ NOT NULL,
+            status VARCHAR(20) DEFAULT 'pending',
+            error_message TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            published_at TIMESTAMPTZ
+        );
+
         -- Индексы
         CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users(chat_id);
         CREATE INDEX IF NOT EXISTS idx_channels_user_id ON channels(user_id);
@@ -165,6 +184,8 @@ async def _create_tables():
         CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
         CREATE INDEX IF NOT EXISTS idx_token_usage_user_id ON token_usage(user_id);
         CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
+        CREATE INDEX IF NOT EXISTS idx_scheduled_posts_status ON scheduled_posts(status);
+        CREATE INDEX IF NOT EXISTS idx_scheduled_posts_scheduled_at ON scheduled_posts(scheduled_at);
         
         """)
         logger.info("✅ Database tables created/verified")

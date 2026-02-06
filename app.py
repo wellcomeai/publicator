@@ -21,13 +21,16 @@ from utils.album_buffer import add_to_buffer, flush_buffer, store_album, ALBUM_W
 # Handlers
 from bot.handlers import (
     start_handler,
+    onboarding_handler,
     agent_handler,
     channel_handler,
     media_handler,
     content_handler,
     profile_handler,
     payment_handler,
+    schedule_handler,
 )
+from services.scheduler_service import run_scheduler
 from bot.middlewares import AlbumMiddleware
 
 logger = structlog.get_logger()
@@ -43,10 +46,12 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # Register routers
 dp.include_router(start_handler.router)
+dp.include_router(onboarding_handler.router)  # До agent_handler — перехватывает Onboarding states
 dp.include_router(agent_handler.router)
 dp.include_router(channel_handler.router)
 dp.include_router(media_handler.router)      # До content_handler — обрабатывает MediaManagement states
 dp.include_router(content_handler.router)
+dp.include_router(schedule_handler.router)
 dp.include_router(profile_handler.router)
 dp.include_router(payment_handler.router)
 
@@ -98,9 +103,13 @@ async def lifespan(app: FastAPI):
     )
     logger.info("✅ Webhook set", url=webhook_url)
 
+    # Запуск фонового планировщика отложенных постов
+    scheduler_task = asyncio.create_task(run_scheduler(bot))
+
     yield
 
     # Shutdown
+    scheduler_task.cancel()
     await bot.delete_webhook()
     await close_db()
     await bot.session.close()
@@ -187,12 +196,15 @@ async def robokassa_result(request: Request):
 
     # Обрабатываем тип платежа
     if payment["payment_type"] == "subscription":
-        await UserManager.activate_subscription(chat_id)
+        plan = payment.get("plan") or "pro"
+        await UserManager.activate_subscription(chat_id, plan=plan)
+        plan_config = config.PLANS.get(plan, {})
+        plan_name = plan_config.get("name", plan)
         try:
-            await bot.send_message(chat_id, "✅ Подписка активирована на 30 дней! 🎉")
+            await bot.send_message(chat_id, f"✅ Подписка «{plan_name}» активирована на 30 дней! 🎉")
         except Exception:
             pass
-        logger.info("✅ Subscription activated via payment", chat_id=chat_id)
+        logger.info("✅ Subscription activated via payment", chat_id=chat_id, plan=plan)
 
     elif payment["payment_type"] == "tokens":
         tokens = payment["tokens_amount"]

@@ -63,20 +63,28 @@ async def _send_long_text(bot: Bot, channel_id: int, text: str, parse_mode: str 
     return last_msg
 
 
+WATERMARK_TEXT = '\n\n<i>✨ Создано с помощью @publicator_ai_bot</i>'
+
+
 async def publish_post(
     bot: Bot,
     channel_id: int,
     text: str,
-    media_info: Optional[Dict[str, Any]] = None
+    media_info: Optional[Dict[str, Any]] = None,
+    watermark: bool = False,
 ) -> Dict[str, Any]:
     """
     Опубликовать пост в канал.
-    
+
     Если caption > 1024 символов — медиа без подписи, текст отдельно.
     Если текст > 4096 — разбивается на части.
     HTML санитизируется перед отправкой.
+    Если watermark=True — добавляет подпись.
     """
     try:
+        if watermark:
+            text = text + WATERMARK_TEXT
+
         # Санитизация
         text = sanitize_html(text)
 

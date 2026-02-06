@@ -6,8 +6,8 @@ from aiogram.fsm.context import FSMContext
 
 from database.managers.user_manager import UserManager
 from database.managers.agent_manager import AgentManager
-from bot.states.states import AgentSetup
-from bot.keyboards.keyboards import agent_menu_kb, agent_confirm_delete_kb, main_menu_kb, cancel_kb
+from bot.states.states import AgentSetup, Onboarding
+from bot.keyboards.keyboards import agent_menu_kb, agent_confirm_delete_kb, main_menu_kb, cancel_kb, preset_choice_kb
 
 router = Router()
 
@@ -45,12 +45,13 @@ async def my_agent(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "agent:create")
 async def agent_create_start(callback: CallbackQuery, state: FSMContext):
+    """Предлагать пресеты вместо пустого ввода"""
     await callback.answer()
-    await state.set_state(AgentSetup.waiting_name)
+    await state.set_state(Onboarding.choosing_preset)
+
     await callback.message.answer(
-        "✏️ Введите <b>название</b> агента (например: «Крипто-канал», «Кулинарный блог»):",
-        parse_mode="HTML",
-        reply_markup=cancel_kb()
+        "🤖 Выберите тип контента или создайте свой:\n",
+        reply_markup=preset_choice_kb()
     )
 
 

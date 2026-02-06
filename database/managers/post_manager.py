@@ -141,6 +141,17 @@ class PostManager:
             return result.split()[-1] != "0"
 
     @staticmethod
+    async def update_post_status(post_id: int, status: str) -> bool:
+        """Обновить статус поста"""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE posts SET status = $2, updated_at = NOW()
+                WHERE id = $1
+            """, post_id, status)
+            return result.split()[-1] != "0"
+
+    @staticmethod
     async def get_user_stats(user_id: int) -> Dict[str, Any]:
         """Статистика постов пользователя"""
         pool = await get_pool()

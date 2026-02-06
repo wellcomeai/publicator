@@ -14,16 +14,18 @@ logger = structlog.get_logger()
 class PaymentManager:
 
     @staticmethod
-    async def create_payment(user_id: int, amount_rub: int, payment_type: str, tokens_amount: int = 0) -> Dict[str, Any]:
+    async def create_payment(user_id: int, amount_rub: int, payment_type: str,
+                              tokens_amount: int = 0, plan: str = None) -> Dict[str, Any]:
         """Создать запись о платеже"""
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow("""
-                INSERT INTO payments (user_id, amount_rub, payment_type, tokens_amount)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO payments (user_id, amount_rub, payment_type, tokens_amount, plan)
+                VALUES ($1, $2, $3, $4, $5)
                 RETURNING *
-            """, user_id, amount_rub, payment_type, tokens_amount)
-            logger.info("💰 Payment created", user_id=user_id, amount=amount_rub, type=payment_type)
+            """, user_id, amount_rub, payment_type, tokens_amount, plan)
+            logger.info("💰 Payment created", user_id=user_id, amount=amount_rub,
+                         type=payment_type, plan=plan)
             return dict(row)
 
     @staticmethod

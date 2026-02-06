@@ -19,8 +19,10 @@ from services import image_service
 from services.media_manager import PostMediaManager
 from services.whisper_service import transcribe_voice
 from services.channel_service import publish_post
+from services.url_extractor import extract_text_from_url, detect_url
 from utils.media import extract_media_info, extract_links, get_text
 from utils.html_sanitizer import sanitize_html
+from config.settings import config
 
 logger = structlog.get_logger()
 router = Router()
@@ -29,6 +31,12 @@ router = Router()
 CAPTION_MAX_LENGTH = 1024
 # Telegram ограничивает текстовые сообщения до 4096 символов
 MESSAGE_MAX_LENGTH = 4096
+
+
+def _can_schedule(user: dict) -> bool:
+    """Проверка доступности расписания по плану пользователя"""
+    plan = user.get("plan", "free") if user else "free"
+    return config.PLANS.get(plan, {}).get("allow_schedule", False)
 
 
 # ============================================================
@@ -338,7 +346,7 @@ async def create_post_generate(message: Message, state: FSMContext, bot: Bot):
         chat_id=message.from_user.id,
         text=result["text"],
         media_info=post_media_info,
-        reply_markup=post_actions_kb(post["id"]),
+        reply_markup=post_actions_kb(post["id"], can_schedule=_can_schedule(user)),
         tokens_used=total_tokens,
         prefix="📝",
         label="Сгенерированный пост",
@@ -359,11 +367,13 @@ async def rewrite_post_start(message: Message, state: FSMContext):
 
     await state.set_state(RewritePost.waiting_post)
     await message.answer(
-        "🔄 Перешлите мне пост, который хотите переписать.\n\n"
-        "Поддерживаются посты с текстом, фото, видео и альбомами.\n"
-        "Все медиа будут сохранены, а текст — переписан ИИ.\n\n"
-        "Также можно отправить голосовое сообщение 🎤 — надиктуйте текст, и ИИ его перепишет.",
-        reply_markup=cancel_kb()
+        "🔄 Перешлите мне пост или отправьте ссылку:\n\n"
+        "📌 <b>Переслать пост</b> — из любого канала (с медиа)\n"
+        "🔗 <b>Отправить URL</b> — ссылку на статью или новость\n"
+        "🎤 <b>Голосовое</b> — надиктуйте текст для рерайта\n\n"
+        "<i>Пример URL: https://habr.com/ru/articles/123456/</i>",
+        reply_markup=cancel_kb(),
+        parse_mode="HTML"
     )
 
 
@@ -429,7 +439,7 @@ async def rewrite_post_voice(message: Message, state: FSMContext, bot: Bot):
         chat_id=message.from_user.id,
         text=result["text"],
         media_info=None,
-        reply_markup=post_actions_kb(post["id"]),
+        reply_markup=post_actions_kb(post["id"], can_schedule=_can_schedule(user)),
         tokens_used=total_tokens,
         prefix="🔄",
         label="Переписанный пост",
@@ -438,11 +448,84 @@ async def rewrite_post_voice(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(RewritePost.waiting_post)
 async def rewrite_post_received(message: Message, state: FSMContext, bot: Bot, album: list = None):
-    """Обработка пересланного поста (одиночного или альбома)"""
+    """Обработка пересланного поста, URL, или обычного текста"""
     user, error = await _check_prerequisites(message, state)
     if error:
         await message.answer(error)
         return
+
+    # ===== ПРОВЕРКА НА URL =====
+    text_content = get_text(message)
+
+    if text_content and not album and not message.forward_from_chat:
+        url = detect_url(text_content)
+        if url:
+            # Это URL → извлекаем текст
+            status_msg = await message.answer("🔗 Загружаю контент с сайта...")
+
+            extracted = await extract_text_from_url(url)
+
+            if not extracted["success"]:
+                await status_msg.edit_text(
+                    f"❌ Не удалось извлечь текст: {extracted.get('error', 'Неизвестная ошибка')}\n\n"
+                    f"Попробуйте переслать пост напрямую или скопировать текст вручную."
+                )
+                return
+
+            original_text = extracted["text"]
+            title = extracted.get("title", "")
+
+            await status_msg.edit_text("⏳ Переписываю статью...")
+
+            agent = await AgentManager.get_agent(user["id"])
+
+            result = await openai_service.rewrite_post(
+                original_text=original_text,
+                agent_instructions=agent["instructions"],
+                links_info=f"Источник: {url}" + (f"\nЗаголовок: {title}" if title else ""),
+                model=agent["model"],
+            )
+
+            if not result["success"]:
+                await status_msg.edit_text(f"❌ Ошибка рерайта: {result.get('error', 'Неизвестная ошибка')}")
+                return
+
+            total_tokens = result["total_tokens"]
+            await UserManager.spend_tokens(message.from_user.id, total_tokens)
+
+            conversation_history = [
+                {"role": "user", "content": f"Перепиши статью с {url}:\n{original_text[:2000]}"},
+                {"role": "assistant", "content": result["text"]},
+            ]
+
+            post = await PostManager.create_post(
+                user_id=user["id"],
+                generated_text=result["text"],
+                original_text=original_text[:5000],
+                input_tokens=result["input_tokens"],
+                output_tokens=result["output_tokens"],
+                conversation_history=conversation_history,
+            )
+
+            await state.clear()
+            await state.update_data(current_post_id=post["id"])
+
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+
+            await _send_post_preview(
+                bot=bot,
+                chat_id=message.from_user.id,
+                text=result["text"],
+                media_info=None,
+                reply_markup=post_actions_kb(post["id"], can_schedule=_can_schedule(user)),
+                tokens_used=total_tokens,
+                prefix="🔗",
+                label="Рерайт из URL",
+            )
+            return
 
     # ===== СБОР ТЕКСТА И МЕДИА =====
     if album:
@@ -517,7 +600,7 @@ async def rewrite_post_received(message: Message, state: FSMContext, bot: Bot, a
         chat_id=message.from_user.id,
         text=result["text"],
         media_info=media_info,
-        reply_markup=post_actions_kb(post["id"]),
+        reply_markup=post_actions_kb(post["id"], can_schedule=_can_schedule(user)),
         tokens_used=total_tokens,
         prefix="🔄",
         label="Переписанный пост",
@@ -631,7 +714,7 @@ async def edit_post_process(message: Message, state: FSMContext, bot: Bot):
         chat_id=message.from_user.id,
         text=result["text"],
         media_info=media_info,
-        reply_markup=post_actions_kb(post_id),
+        reply_markup=post_actions_kb(post_id, can_schedule=_can_schedule(user)),
         tokens_used=total_tokens,
         prefix="✏️",
         label="Отредактированный пост",
@@ -715,7 +798,7 @@ async def regenerate_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
         chat_id=callback.from_user.id,
         text=result["text"],
         media_info=media_info,
-        reply_markup=post_actions_kb(post_id),
+        reply_markup=post_actions_kb(post_id, can_schedule=_can_schedule(user)),
         tokens_used=total_tokens,
         prefix="🔄",
         label="Перегенерированный пост",
@@ -803,7 +886,7 @@ async def clone_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
         chat_id=callback.from_user.id,
         text=result["text"],
         media_info=None,
-        reply_markup=post_actions_kb(new_post["id"]),
+        reply_markup=post_actions_kb(new_post["id"], can_schedule=_can_schedule(user)),
         tokens_used=total_tokens,
         prefix="🔄",
         label="Похожий пост",
@@ -835,6 +918,16 @@ async def publish_post_handler(callback: CallbackQuery, state: FSMContext, bot: 
         await callback.message.answer("❌ Пост не найден.")
         return
 
+    # Проверка лимита постов
+    limit_info = await UserManager.check_post_limit(callback.from_user.id)
+    if not limit_info["can_post"]:
+        posts_limit = limit_info["posts_limit"]
+        await callback.message.answer(
+            f"⚠️ Вы достигли лимита {posts_limit} постов в месяц на бесплатном плане.\n\n"
+            f"Перейдите на платный тариф в разделе 💳 Подписка."
+        )
+        return
+
     text_to_publish = post["final_text"] or post["generated_text"]
     media_info = _parse_media_info(post.get("media_info"))
 
@@ -845,10 +938,12 @@ async def publish_post_handler(callback: CallbackQuery, state: FSMContext, bot: 
         channel_id=channel["channel_id"],
         text=text_to_publish,
         media_info=media_info,
+        watermark=limit_info["watermark"],
     )
 
     if result["success"]:
         await PostManager.mark_published(post_id, channel["channel_id"])
+        await UserManager.increment_post_count(callback.from_user.id)
         ch_display = f"@{channel['channel_username']}" if channel.get("channel_username") else channel.get("channel_title", "канал")
         await status_msg.edit_text(f"✅ Пост опубликован в {ch_display}!")
         await state.clear()

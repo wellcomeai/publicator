@@ -36,9 +36,43 @@ class Config:
 
     # Token packages (tokens: price_rub)
     TOKEN_PACKAGES = {
-        50000: 1,
+        50000: 100,
         150000: 250,
         500000: 700,
+    }
+
+    # Plans
+    PLANS = {
+        "free": {
+            "name": "Бесплатный",
+            "price_rub": 0,
+            "posts_per_month": 5,
+            "allow_photo": True,
+            "allow_video": False,
+            "allow_schedule": False,
+            "allow_analytics": False,
+            "watermark": True,
+        },
+        "starter": {
+            "name": "Стартер",
+            "price_rub": 100,
+            "posts_per_month": 15,
+            "allow_photo": True,
+            "allow_video": False,
+            "allow_schedule": False,
+            "allow_analytics": False,
+            "watermark": False,
+        },
+        "pro": {
+            "name": "Про",
+            "price_rub": 300,
+            "posts_per_month": None,  # безлимит
+            "allow_photo": True,
+            "allow_video": True,
+            "allow_schedule": True,
+            "allow_analytics": True,
+            "watermark": False,
+        },
     }
 
 

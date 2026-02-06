@@ -24,13 +24,20 @@ async def profile(message: Message, state: FSMContext):
 
     access = await UserManager.get_access_info(message.from_user.id)
 
-    # Статус доступа — подписка приоритетнее триала
-    if access["subscription_active"]:
-        status = f"💳 Подписка активна ({access['subscription_days_left']} дн.)"
-    elif access["trial_active"]:
-        status = f"🎁 Пробный период ({access['trial_days_left']} дн.)"
+    # Статус доступа — план
+    plan_name = access.get("plan_name", "Бесплатный")
+    if access.get("subscription_active"):
+        status = f"💳 {plan_name} ({access['subscription_days_left']} дн.)"
     else:
-        status = "❌ Нет активной подписки"
+        status = f"📋 {plan_name}"
+
+    # Лимит постов
+    posts_limit = access.get("posts_limit")
+    posts_used = access.get("posts_used", 0)
+    if posts_limit:
+        posts_info = f"📝 Постов в этом месяце: {posts_used}/{posts_limit}"
+    else:
+        posts_info = f"📝 Постов в этом месяце: {posts_used} (безлимит)"
 
     # Агент
     agent = await AgentManager.get_agent(user["id"])
@@ -59,6 +66,7 @@ async def profile(message: Message, state: FSMContext):
         f"👋 {message.from_user.first_name}\n"
         f"🆔 <code>{message.from_user.id}</code>\n\n"
         f"<b>Статус:</b> {status}\n"
+        f"{posts_info}\n"
         f"<b>Агент:</b> {agent_info}\n"
         f"<b>Канал:</b> {channel_info}\n\n"
         f"<b>Токены:</b>\n"

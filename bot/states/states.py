@@ -23,6 +23,18 @@ class RewritePost(StatesGroup):
     waiting_edit = State()           # Редактирование рерайта
 
 
+class Onboarding(StatesGroup):
+    choosing_preset = State()       # Выбор пресета агента
+    custom_prompt = State()         # Ввод кастомного промта
+    naming_agent = State()          # Ввод имени агента
+    waiting_channel = State()       # Привязка канала
+    first_post_prompt = State()     # Создание первого поста
+
+
+class SchedulePost(StatesGroup):
+    waiting_datetime = State()      # Ожидание даты и времени
+
+
 class MediaManagement(StatesGroup):
     """Управление медиа поста"""
     menu = State()                    # В меню медиа (ожидание действия)
