@@ -16,6 +16,7 @@ from bot.keyboards.keyboards import post_actions_kb, main_menu_kb, cancel_kb
 from services import openai_service
 from services.channel_service import publish_post
 from utils.media import extract_media_info, extract_links, get_text
+from utils.html_sanitizer import sanitize_html
 
 logger = structlog.get_logger()
 router = Router()
@@ -54,24 +55,35 @@ async def _check_prerequisites(message_or_cb, state: FSMContext):
 
 
 # ============================================================
-#  УТИЛИТЫ ДЛЯ ОТПРАВКИ МЕДИА-ПРЕВЬЮ
+#  УТИЛИТЫ ДЛЯ ОТПРАВКИ
 # ============================================================
 
-async def _send_long_text(bot: Bot, chat_id: int, text: str, reply_markup=None, parse_mode: str = "HTML") -> Optional[Message]:
+async def _send_long_text(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str = "HTML",
+) -> Optional[Message]:
     """
     Отправка длинного текста с разбиением на части (если > 4096 символов).
     reply_markup прикрепляется только к последнему сообщению.
     """
-    if len(text) <= MESSAGE_MAX_LENGTH:
-        return await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    # Санитизация HTML перед отправкой
+    if parse_mode == "HTML":
+        text = sanitize_html(text)
 
-    # Разбиваем на части по 4096
+    if len(text) <= MESSAGE_MAX_LENGTH:
+        return await bot.send_message(
+            chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode,
+        )
+
+    # Разбиваем на части
     parts = []
     while text:
         if len(text) <= MESSAGE_MAX_LENGTH:
             parts.append(text)
             break
-        # Ищем последний перенос строки в пределах лимита
         cut_pos = text.rfind("\n", 0, MESSAGE_MAX_LENGTH)
         if cut_pos <= 0:
             cut_pos = MESSAGE_MAX_LENGTH
@@ -101,10 +113,11 @@ async def _send_post_preview(
 ) -> Optional[Message]:
     """
     Отправка превью поста с медиа (если есть).
-    Если caption > 1024 символов — медиа отправляется без подписи, текст отдельным сообщением.
+    Если caption > 1024 — медиа без подписи, текст отдельно.
     """
     tokens_note = f"\n\n<i>🪙 Использовано токенов: {tokens_used:,}</i>" if tokens_used else ""
-    full_caption = f"{prefix} <b>{label}:</b>\n\n{text}{tokens_note}"
+    raw_caption = f"{prefix} <b>{label}:</b>\n\n{text}{tokens_note}"
+    full_caption = sanitize_html(raw_caption)
 
     # Без медиа — просто текст
     if not media_info:
@@ -133,7 +146,7 @@ async def _send_post_preview(
             if media_group:
                 await bot.send_media_group(chat_id, media_group)
 
-                # Если caption не влез в медиа — отправляем текст отдельно
+                # Если caption не влез в медиа — текст отдельно
                 if not use_caption:
                     await _send_long_text(bot, chat_id, full_caption)
 
@@ -157,7 +170,6 @@ async def _send_post_preview(
         method = getattr(bot, method_name)
 
         if len(full_caption) <= CAPTION_MAX_LENGTH:
-            # Caption влезает — отправляем медиа с подписью
             return await method(
                 chat_id,
                 **{param_name: media_info["file_id"]},
@@ -166,11 +178,8 @@ async def _send_post_preview(
                 parse_mode="HTML",
             )
         else:
-            # Caption слишком длинный — медиа без подписи, текст отдельно
-            await method(
-                chat_id,
-                **{param_name: media_info["file_id"]},
-            )
+            # Медиа без подписи + текст отдельно
+            await method(chat_id, **{param_name: media_info["file_id"]})
             return await _send_long_text(bot, chat_id, full_caption, reply_markup=reply_markup)
 
     # Fallback — текстом
@@ -290,7 +299,7 @@ async def create_post_generate(message: Message, state: FSMContext, bot: Bot):
 
 
 # ============================================================
-#  2. РЕРАЙТ ПОСТА (одиночное + альбомы через AlbumMiddleware)
+#  2. РЕРАЙТ ПОСТА (одиночное + альбомы)
 # ============================================================
 
 @router.message(F.text == "🔄 Рерайт поста")
@@ -386,7 +395,6 @@ async def rewrite_post_received(message: Message, state: FSMContext, bot: Bot, a
     except Exception:
         pass
 
-    # ===== ПРЕВЬЮ С МЕДИА =====
     await _send_post_preview(
         bot=bot,
         chat_id=message.from_user.id,
