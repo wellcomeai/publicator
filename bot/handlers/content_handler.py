@@ -20,6 +20,11 @@ from utils.media import extract_media_info, extract_links, get_text
 logger = structlog.get_logger()
 router = Router()
 
+# Telegram ограничивает caption медиа до 1024 символов
+CAPTION_MAX_LENGTH = 1024
+# Telegram ограничивает текстовые сообщения до 4096 символов
+MESSAGE_MAX_LENGTH = 4096
+
 
 # ============================================================
 #  MIDDLEWARE-ПРОВЕРКИ
@@ -52,6 +57,38 @@ async def _check_prerequisites(message_or_cb, state: FSMContext):
 #  УТИЛИТЫ ДЛЯ ОТПРАВКИ МЕДИА-ПРЕВЬЮ
 # ============================================================
 
+async def _send_long_text(bot: Bot, chat_id: int, text: str, reply_markup=None, parse_mode: str = "HTML") -> Optional[Message]:
+    """
+    Отправка длинного текста с разбиением на части (если > 4096 символов).
+    reply_markup прикрепляется только к последнему сообщению.
+    """
+    if len(text) <= MESSAGE_MAX_LENGTH:
+        return await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+    # Разбиваем на части по 4096
+    parts = []
+    while text:
+        if len(text) <= MESSAGE_MAX_LENGTH:
+            parts.append(text)
+            break
+        # Ищем последний перенос строки в пределах лимита
+        cut_pos = text.rfind("\n", 0, MESSAGE_MAX_LENGTH)
+        if cut_pos <= 0:
+            cut_pos = MESSAGE_MAX_LENGTH
+        parts.append(text[:cut_pos])
+        text = text[cut_pos:].lstrip("\n")
+
+    last_msg = None
+    for i, part in enumerate(parts):
+        is_last = (i == len(parts) - 1)
+        last_msg = await bot.send_message(
+            chat_id, part,
+            reply_markup=reply_markup if is_last else None,
+            parse_mode=parse_mode,
+        )
+    return last_msg
+
+
 async def _send_post_preview(
     bot: Bot,
     chat_id: int,
@@ -64,28 +101,28 @@ async def _send_post_preview(
 ) -> Optional[Message]:
     """
     Отправка превью поста с медиа (если есть).
+    Если caption > 1024 символов — медиа отправляется без подписи, текст отдельным сообщением.
     """
     tokens_note = f"\n\n<i>🪙 Использовано токенов: {tokens_used:,}</i>" if tokens_used else ""
     full_caption = f"{prefix} <b>{label}:</b>\n\n{text}{tokens_note}"
 
     # Без медиа — просто текст
     if not media_info:
-        return await bot.send_message(
-            chat_id, full_caption,
-            reply_markup=reply_markup, parse_mode="HTML",
-        )
+        return await _send_long_text(bot, chat_id, full_caption, reply_markup=reply_markup)
 
     media_type = media_info.get("type")
 
-    # Альбом — отправляем группу + отдельное сообщение с кнопками
+    # === АЛЬБОМ ===
     if media_type == "album":
         items = media_info.get("items", [])
         if items:
             media_group = []
+            use_caption = len(full_caption) <= CAPTION_MAX_LENGTH
+
             for i, item in enumerate(items):
                 file_id = item["file_id"]
                 item_type = item.get("type", "photo")
-                cap = full_caption if i == 0 else None
+                cap = full_caption if (i == 0 and use_caption) else None
                 parse = "HTML" if cap else None
 
                 if item_type == "photo":
@@ -95,6 +132,11 @@ async def _send_post_preview(
 
             if media_group:
                 await bot.send_media_group(chat_id, media_group)
+
+                # Если caption не влез в медиа — отправляем текст отдельно
+                if not use_caption:
+                    await _send_long_text(bot, chat_id, full_caption)
+
                 if reply_markup:
                     return await bot.send_message(
                         chat_id, "👆 Выберите действие:",
@@ -102,7 +144,7 @@ async def _send_post_preview(
                     )
                 return None
 
-    # Одиночные медиа
+    # === ОДИНОЧНЫЕ МЕДИА ===
     send_methods = {
         "photo": ("send_photo", "photo"),
         "video": ("send_video", "video"),
@@ -113,19 +155,26 @@ async def _send_post_preview(
     if media_type in send_methods:
         method_name, param_name = send_methods[media_type]
         method = getattr(bot, method_name)
-        return await method(
-            chat_id,
-            **{param_name: media_info["file_id"]},
-            caption=full_caption,
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-        )
+
+        if len(full_caption) <= CAPTION_MAX_LENGTH:
+            # Caption влезает — отправляем медиа с подписью
+            return await method(
+                chat_id,
+                **{param_name: media_info["file_id"]},
+                caption=full_caption,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+        else:
+            # Caption слишком длинный — медиа без подписи, текст отдельно
+            await method(
+                chat_id,
+                **{param_name: media_info["file_id"]},
+            )
+            return await _send_long_text(bot, chat_id, full_caption, reply_markup=reply_markup)
 
     # Fallback — текстом
-    return await bot.send_message(
-        chat_id, full_caption,
-        reply_markup=reply_markup, parse_mode="HTML",
-    )
+    return await _send_long_text(bot, chat_id, full_caption, reply_markup=reply_markup)
 
 
 def _collect_album_media(album: List[Message]) -> Dict[str, Any]:
@@ -135,6 +184,10 @@ def _collect_album_media(album: List[Message]) -> Dict[str, Any]:
         media = extract_media_info(msg)
         if media:
             items.append(media)
+
+    logger.info("📸 Album media collected",
+                total_messages=len(album),
+                media_items=len(items))
 
     return {
         "type": "album",
