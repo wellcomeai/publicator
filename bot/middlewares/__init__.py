@@ -8,9 +8,9 @@ from aiogram.types import Message
 
 logger = structlog.get_logger()
 
-# Буфер для сбора альбомов: {media_group_id: {"messages": [...], "event": asyncio.Event}}
+# Буфер для сбора альбомов: {media_group_id: {"messages": [...], "processed": bool}}
 _album_data: Dict[str, Dict] = {}
-ALBUM_WAIT_SECONDS = 1.0
+ALBUM_WAIT_SECONDS = 2.0  # Увеличено с 1.0 для надёжного сбора больших альбомов (7-10 фото)
 
 
 class AlbumMiddleware(BaseMiddleware):
@@ -46,6 +46,11 @@ class AlbumMiddleware(BaseMiddleware):
             }
 
         _album_data[group_id]["messages"].append(event)
+        
+        logger.debug("📸 Album message received",
+                      media_group_id=group_id,
+                      message_id=event.message_id,
+                      buffered=len(_album_data[group_id]["messages"]))
 
         # Ждём чтобы собрать все сообщения группы
         await asyncio.sleep(ALBUM_WAIT_SECONDS)
