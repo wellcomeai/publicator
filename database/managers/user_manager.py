@@ -48,12 +48,12 @@ class UserManager:
 
         now = datetime.now(timezone.utc)
 
-        # Триал активен
-        if user["trial_expires_at"] and user["trial_expires_at"] > now:
-            return True
-
         # Подписка активна
         if user["is_subscribed"] and user["subscription_expires_at"] and user["subscription_expires_at"] > now:
+            return True
+
+        # Триал активен
+        if user["trial_expires_at"] and user["trial_expires_at"] > now:
             return True
 
         return False
@@ -97,7 +97,7 @@ class UserManager:
 
     @staticmethod
     async def activate_subscription(chat_id: int, months: int = 1) -> bool:
-        """Активировать/продлить подписку"""
+        """Активировать/продлить подписку с учётом триала"""
         pool = await get_pool()
         async with pool.acquire() as conn:
             user = await conn.fetchrow("SELECT * FROM users WHERE chat_id = $1", chat_id)
@@ -105,12 +105,17 @@ class UserManager:
                 return False
 
             now = datetime.now(timezone.utc)
+            duration = timedelta(days=30 * months)
 
-            # Если подписка активна — продлеваем от текущей даты окончания
+            # 1. Подписка уже активна — продлеваем от её конца
             if user["subscription_expires_at"] and user["subscription_expires_at"] > now:
-                new_expires = user["subscription_expires_at"] + timedelta(days=30 * months)
+                new_expires = user["subscription_expires_at"] + duration
+            # 2. Триал ещё активен — подписка начинается от конца триала
+            elif user["trial_expires_at"] and user["trial_expires_at"] > now:
+                new_expires = user["trial_expires_at"] + duration
+            # 3. Ничего нет — от текущего момента
             else:
-                new_expires = now + timedelta(days=30 * months)
+                new_expires = now + duration
 
             await conn.execute("""
                 UPDATE users SET is_subscribed = TRUE, subscription_expires_at = $2, updated_at = NOW()
