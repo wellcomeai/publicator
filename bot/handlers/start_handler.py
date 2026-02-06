@@ -24,10 +24,10 @@ async def cmd_start(message: Message, state: FSMContext):
     
     access = await UserManager.get_access_info(message.from_user.id)
     
-    if access["trial_active"]:
-        access_text = f"🎁 Пробный период: {access['trial_days_left']} дн."
-    elif access["subscription_active"]:
+    if access["subscription_active"]:
         access_text = f"💳 Подписка активна: {access['subscription_days_left']} дн."
+    elif access["trial_active"]:
+        access_text = f"🎁 Пробный период: {access['trial_days_left']} дн."
     else:
         access_text = "⚠️ Нет активной подписки"
     
