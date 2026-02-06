@@ -1,24 +1,26 @@
-"""Middleware для сбора медиагрупп (альбомов) в один батч"""
+"""Middleware для получения собранных медиагрупп (альбомов)
 
-import asyncio
+Буферизация и сбор альбомов происходит на уровне webhook (app.py).
+Этот middleware только достаёт готовый альбом из буфера и передаёт в handler.
+"""
+
 import structlog
 from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import Message
+from utils.album_buffer import retrieve_album
 
 logger = structlog.get_logger()
-
-# Буфер для сбора альбомов: {media_group_id: {"messages": [...], "processed": bool}}
-_album_data: Dict[str, Dict] = {}
-ALBUM_WAIT_SECONDS = 2.0  # Увеличено с 1.0 для надёжного сбора больших альбомов (7-10 фото)
 
 
 class AlbumMiddleware(BaseMiddleware):
     """
-    Middleware для сбора медиагрупп.
+    Middleware для передачи собранных медиагрупп в хэндлер.
     
-    Telegram отправляет каждый элемент альбома отдельным сообщением.
-    Этот middleware собирает их в список и передаёт хэндлеру один раз.
+    Альбомы собираются на уровне webhook handler (app.py) — там буферизуются
+    все сообщения media_group и через 2 секунды подаются в dispatcher.
+    
+    Этот middleware достаёт собранный альбом из буфера.
     
     В хэндлере доступно через data["album"]:
     - Если сообщение — часть альбома: album = [Message, Message, ...]
@@ -32,48 +34,22 @@ class AlbumMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         if not event.media_group_id:
-            # Одиночное сообщение — пропускаем как обычно
+            # Одиночное сообщение
             data["album"] = None
             return await handler(event, data)
 
-        group_id = event.media_group_id
+        # Достаём собранный альбом из буфера
+        album_messages = retrieve_album(event.media_group_id)
 
-        if group_id not in _album_data:
-            # Первое сообщение альбома — создаём буфер
-            _album_data[group_id] = {
-                "messages": [],
-                "processed": False,
-            }
+        if album_messages and len(album_messages) > 1:
+            data["album"] = album_messages
+            logger.info("📸 Album passed to handler",
+                        media_group_id=event.media_group_id,
+                        count=len(album_messages))
+        else:
+            # Если по какой-то причине альбом не собрался — одиночное
+            data["album"] = None
+            logger.warning("⚠️ Album buffer empty, treating as single message",
+                           media_group_id=event.media_group_id)
 
-        _album_data[group_id]["messages"].append(event)
-        
-        logger.debug("📸 Album message received",
-                      media_group_id=group_id,
-                      message_id=event.message_id,
-                      buffered=len(_album_data[group_id]["messages"]))
-
-        # Ждём чтобы собрать все сообщения группы
-        await asyncio.sleep(ALBUM_WAIT_SECONDS)
-
-        # Только первый «проснувшийся» обрабатывает
-        if _album_data.get(group_id, {}).get("processed"):
-            return  # Уже обработано другим сообщением
-
-        _album_data[group_id]["processed"] = True
-        messages = _album_data.pop(group_id, {}).get("messages", [])
-
-        if not messages:
-            return
-
-        # Сортируем по message_id (порядок отправки)
-        messages.sort(key=lambda m: m.message_id)
-
-        logger.info("📸 Album collected",
-                     media_group_id=group_id,
-                     count=len(messages))
-
-        # Передаём список сообщений в data["album"]
-        data["album"] = messages
-
-        # Вызываем хэндлер с первым сообщением (как основным)
-        return await handler(messages[0], data)
+        return await handler(event, data)
