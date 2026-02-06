@@ -18,10 +18,11 @@ async def subscription_menu(message: Message, state: FSMContext):
     
     access = await UserManager.get_access_info(message.from_user.id)
     
-    if access["trial_active"]:
-        status = f"🎁 Пробный период: {access['trial_days_left']} дн. осталось"
-    elif access["subscription_active"]:
+    # Подписка приоритетнее триала
+    if access["subscription_active"]:
         status = f"✅ Подписка активна: {access['subscription_days_left']} дн. осталось"
+    elif access["trial_active"]:
+        status = f"🎁 Пробный период: {access['trial_days_left']} дн. осталось"
     else:
         status = "❌ Нет активного доступа"
     
