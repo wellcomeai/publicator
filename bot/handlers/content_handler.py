@@ -14,6 +14,7 @@ from database.managers.post_manager import PostManager
 from bot.states.states import ContentGeneration, RewritePost
 from bot.keyboards.keyboards import post_actions_kb, main_menu_kb, cancel_kb
 from services import openai_service
+from services.whisper_service import transcribe_voice
 from services.channel_service import publish_post
 from utils.media import extract_media_info, extract_links, get_text
 from utils.html_sanitizer import sanitize_html
@@ -52,6 +53,24 @@ async def _check_prerequisites(message_or_cb, state: FSMContext):
         return None, "⚠️ Сначала создайте ИИ-агента в разделе 🤖 Мой агент."
 
     return user, None
+
+
+# ============================================================
+#  ГОЛОСОВЫЕ СООБЩЕНИЯ
+# ============================================================
+
+async def _get_text_or_transcribe(message: Message, bot: Bot) -> Optional[str]:
+    """
+    Получить текст из сообщения.
+    Если это голосовое — транскрибировать через Whisper.
+    Возвращает текст или None.
+    """
+    # Голосовое сообщение — транскрибируем
+    if message.voice:
+        return await transcribe_voice(bot, message.voice)
+
+    # Обычный текст
+    return get_text(message) or None
 
 
 # ============================================================
@@ -229,13 +248,15 @@ async def create_post_start(message: Message, state: FSMContext):
     await state.set_state(ContentGeneration.waiting_prompt)
     await message.answer(
         "✍️ Опишите, какой пост хотите создать.\n\n"
+        "Можно написать текстом или отправить голосовое сообщение 🎤\n\n"
         "<i>Например: «Напиши пост про топ-5 трендов в ИИ на 2025 год»</i>",
         parse_mode="HTML",
         reply_markup=cancel_kb()
     )
 
 
-@router.message(ContentGeneration.waiting_prompt)
+@router.message(ContentGeneration.waiting_prompt, F.voice)
+@router.message(ContentGeneration.waiting_prompt, F.text)
 async def create_post_generate(message: Message, state: FSMContext, bot: Bot):
     user, error = await _check_prerequisites(message, state)
     if error:
@@ -243,13 +264,21 @@ async def create_post_generate(message: Message, state: FSMContext, bot: Bot):
         return
 
     agent = await AgentManager.get_agent(user["id"])
-    prompt = get_text(message)
 
-    if not prompt:
-        await message.answer("❌ Пустое сообщение. Напишите, о чём создать пост.")
-        return
-
-    status_msg = await message.answer("⏳ Генерирую пост...")
+    # Получаем текст (из текста или голосового)
+    if message.voice:
+        status_msg = await message.answer("🎤 Распознаю голосовое сообщение...")
+        prompt = await transcribe_voice(bot, message.voice)
+        if not prompt:
+            await status_msg.edit_text("❌ Не удалось распознать голосовое сообщение. Попробуйте ещё раз или напишите текстом.")
+            return
+        await status_msg.edit_text(f"✅ Распознано. Генерирую пост...\n\n<i>🎤 «{prompt[:200]}{'...' if len(prompt) > 200 else ''}»</i>", parse_mode="HTML")
+    else:
+        prompt = get_text(message)
+        if not prompt:
+            await message.answer("❌ Пустое сообщение. Напишите, о чём создать пост.")
+            return
+        status_msg = await message.answer("⏳ Генерирую пост...")
 
     result = await openai_service.generate_content(
         user_prompt=prompt,
@@ -299,7 +328,7 @@ async def create_post_generate(message: Message, state: FSMContext, bot: Bot):
 
 
 # ============================================================
-#  2. РЕРАЙТ ПОСТА (одиночное + альбомы)
+#  2. РЕРАЙТ ПОСТА (одиночное + альбомы + голосовые)
 # ============================================================
 
 @router.message(F.text == "🔄 Рерайт поста")
@@ -314,8 +343,78 @@ async def rewrite_post_start(message: Message, state: FSMContext):
     await message.answer(
         "🔄 Перешлите мне пост, который хотите переписать.\n\n"
         "Поддерживаются посты с текстом, фото, видео и альбомами.\n"
-        "Все медиа будут сохранены, а текст — переписан ИИ.",
+        "Все медиа будут сохранены, а текст — переписан ИИ.\n\n"
+        "Также можно отправить голосовое сообщение 🎤 — надиктуйте текст, и ИИ его перепишет.",
         reply_markup=cancel_kb()
+    )
+
+
+@router.message(RewritePost.waiting_post, F.voice)
+async def rewrite_post_voice(message: Message, state: FSMContext, bot: Bot):
+    """Обработка голосового сообщения в режиме рерайта — транскрибируем и переписываем"""
+    user, error = await _check_prerequisites(message, state)
+    if error:
+        await message.answer(error)
+        return
+
+    status_msg = await message.answer("🎤 Распознаю голосовое сообщение...")
+    original_text = await transcribe_voice(bot, message.voice)
+
+    if not original_text:
+        await status_msg.edit_text("❌ Не удалось распознать голосовое сообщение. Попробуйте ещё раз или напишите текстом.")
+        return
+
+    await status_msg.edit_text(
+        f"✅ Распознано. Переписываю...\n\n<i>🎤 «{original_text[:200]}{'...' if len(original_text) > 200 else ''}»</i>",
+        parse_mode="HTML"
+    )
+
+    agent = await AgentManager.get_agent(user["id"])
+
+    result = await openai_service.rewrite_post(
+        original_text=original_text,
+        agent_instructions=agent["instructions"],
+        model=agent["model"],
+    )
+
+    if not result["success"]:
+        await status_msg.edit_text(f"❌ Ошибка рерайта: {result.get('error', 'Неизвестная ошибка')}")
+        return
+
+    total_tokens = result["total_tokens"]
+    await UserManager.spend_tokens(message.from_user.id, total_tokens)
+
+    conversation_history = [
+        {"role": "user", "content": f"Перепиши пост:\n{original_text}"},
+        {"role": "assistant", "content": result["text"]},
+    ]
+
+    post = await PostManager.create_post(
+        user_id=user["id"],
+        generated_text=result["text"],
+        original_text=original_text,
+        input_tokens=result["input_tokens"],
+        output_tokens=result["output_tokens"],
+        conversation_history=conversation_history,
+    )
+
+    await state.clear()
+    await state.update_data(current_post_id=post["id"])
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    await _send_post_preview(
+        bot=bot,
+        chat_id=message.from_user.id,
+        text=result["text"],
+        media_info=None,
+        reply_markup=post_actions_kb(post["id"]),
+        tokens_used=total_tokens,
+        prefix="🔄",
+        label="Переписанный пост",
     )
 
 
@@ -352,7 +451,7 @@ async def rewrite_post_received(message: Message, state: FSMContext, bot: Bot, a
         links_text = extract_links(message)
 
     if not original_text:
-        await message.answer("❌ В сообщении нет текста для рерайта. Перешлите пост с текстом.")
+        await message.answer("❌ В сообщении нет текста для рерайта. Перешлите пост с текстом или отправьте голосовое 🎤")
         return
 
     agent = await AgentManager.get_agent(user["id"])
@@ -420,14 +519,15 @@ async def edit_post_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(current_post_id=post_id)
 
     await callback.message.answer(
-        "✏️ Напишите, что нужно изменить.\n\n"
+        "✏️ Напишите или надиктуйте 🎤, что нужно изменить.\n\n"
         "<i>Например: «Сделай короче», «Добавь больше эмодзи», «Измени заголовок»</i>",
         parse_mode="HTML",
         reply_markup=cancel_kb()
     )
 
 
-@router.message(ContentGeneration.waiting_edit)
+@router.message(ContentGeneration.waiting_edit, F.voice)
+@router.message(ContentGeneration.waiting_edit, F.text)
 async def edit_post_process(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     post_id = data.get("current_post_id")
@@ -450,12 +550,23 @@ async def edit_post_process(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
-    edit_instruction = get_text(message)
-    if not edit_instruction:
-        await message.answer("❌ Пустое сообщение. Опишите, что изменить.")
-        return
-
-    status_msg = await message.answer("⏳ Редактирую...")
+    # Получаем текст (из текста или голосового)
+    if message.voice:
+        status_msg = await message.answer("🎤 Распознаю голосовое сообщение...")
+        edit_instruction = await transcribe_voice(bot, message.voice)
+        if not edit_instruction:
+            await status_msg.edit_text("❌ Не удалось распознать голосовое сообщение. Попробуйте ещё раз или напишите текстом.")
+            return
+        await status_msg.edit_text(
+            f"✅ Распознано. Редактирую...\n\n<i>🎤 «{edit_instruction[:200]}{'...' if len(edit_instruction) > 200 else ''}»</i>",
+            parse_mode="HTML"
+        )
+    else:
+        edit_instruction = get_text(message)
+        if not edit_instruction:
+            await message.answer("❌ Пустое сообщение. Опишите, что изменить.")
+            return
+        status_msg = await message.answer("⏳ Редактирую...")
 
     conversation_history = post.get("conversation_history") or []
     if isinstance(conversation_history, str):
