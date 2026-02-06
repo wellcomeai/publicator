@@ -38,14 +38,6 @@ async def _create_tables():
     async with p.acquire() as conn:
         await conn.execute("""
         
-        -- Удаляем старые таблицы (если есть от другого проекта)
-        DROP TABLE IF EXISTS token_usage CASCADE;
-        DROP TABLE IF EXISTS payments CASCADE;
-        DROP TABLE IF EXISTS posts CASCADE;
-        DROP TABLE IF EXISTS channels CASCADE;
-        DROP TABLE IF EXISTS agents CASCADE;
-        DROP TABLE IF EXISTS users CASCADE;
-        
         -- Пользователи
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
