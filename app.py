@@ -25,6 +25,7 @@ from bot.handlers import (
     profile_handler,
     payment_handler,
 )
+from bot.middlewares import AlbumMiddleware
 
 logger = structlog.get_logger()
 
@@ -44,6 +45,9 @@ dp.include_router(channel_handler.router)
 dp.include_router(content_handler.router)
 dp.include_router(profile_handler.router)
 dp.include_router(payment_handler.router)
+
+# Album middleware — собирает медиагруппы в один батч
+content_handler.router.message.middleware(AlbumMiddleware())
 
 
 # ===== FASTAPI LIFESPAN =====
