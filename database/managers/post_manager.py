@@ -130,6 +130,17 @@ class PostManager:
             return result.split()[-1] != "0"
 
     @staticmethod
+    async def update_media_info(post_id: int, media_info: Optional[Dict]) -> bool:
+        """Обновить media_info поста"""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE posts SET media_info = $2, updated_at = NOW()
+                WHERE id = $1
+            """, post_id, json.dumps(media_info) if media_info else None)
+            return result.split()[-1] != "0"
+
+    @staticmethod
     async def get_user_stats(user_id: int) -> Dict[str, Any]:
         """Статистика постов пользователя"""
         pool = await get_pool()

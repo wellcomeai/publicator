@@ -24,10 +24,14 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
 def post_actions_kb(post_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish:{post_id}"),
+            InlineKeyboardButton(text="📢 Опубликовать", callback_data=f"publish:{post_id}"),
         ],
         [
             InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit:{post_id}"),
+            InlineKeyboardButton(text="🖼 Медиа", callback_data=f"media:{post_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Похожий", callback_data=f"clone:{post_id}"),
             InlineKeyboardButton(text="🔄 Заново", callback_data=f"regenerate:{post_id}"),
         ],
         [
@@ -79,6 +83,82 @@ def subscription_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🪙 50K токенов — 100₽", callback_data="pay:tokens:50000")],
         [InlineKeyboardButton(text="🪙 150K токенов — 250₽", callback_data="pay:tokens:150000")],
         [InlineKeyboardButton(text="🪙 500K токенов — 700₽", callback_data="pay:tokens:500000")],
+    ])
+
+
+# ===== МЕДИА =====
+
+def media_actions_kb(post_id: int, items_count: int) -> InlineKeyboardMarkup:
+    """Клавиатура управления медиа"""
+    buttons = []
+
+    if items_count < 10:
+        buttons.append([
+            InlineKeyboardButton(text="🎨 Картинка (AI)", callback_data=f"media_gen_image:{post_id}"),
+            InlineKeyboardButton(text="🎬 Видео (AI)", callback_data=f"media_gen_video:{post_id}"),
+        ])
+        buttons.append([
+            InlineKeyboardButton(text="📎 Загрузить своё", callback_data=f"media_upload:{post_id}"),
+        ])
+
+    if items_count > 0:
+        buttons.append([
+            InlineKeyboardButton(text="🗑 Удалить медиа", callback_data=f"media_delete:{post_id}"),
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="✅ Готово", callback_data=f"media_done:{post_id}"),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def image_prompt_kb(post_id: int) -> InlineKeyboardMarkup:
+    """Выбор промта для генерации картинки"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎯 По теме поста", callback_data=f"media_gen_image_auto:{post_id}")],
+        [InlineKeyboardButton(text="✏️ Свой промт", callback_data=f"media_gen_image_custom:{post_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"media:{post_id}")],
+    ])
+
+
+def video_prompt_kb(post_id: int) -> InlineKeyboardMarkup:
+    """Выбор промта для генерации видео"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎯 По теме поста", callback_data=f"media_gen_video_auto:{post_id}")],
+        [InlineKeyboardButton(text="✏️ Свой промт", callback_data=f"media_gen_video_custom:{post_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"media:{post_id}")],
+    ])
+
+
+def video_duration_kb(post_id: int, prompt_type: str) -> InlineKeyboardMarkup:
+    """Выбор длительности видео"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="4 сек (~$0.40)", callback_data=f"media_video_dur:4:{post_id}:{prompt_type}"),
+            InlineKeyboardButton(text="8 сек (~$0.80)", callback_data=f"media_video_dur:8:{post_id}:{prompt_type}"),
+        ],
+        [
+            InlineKeyboardButton(text="12 сек (~$1.20)", callback_data=f"media_video_dur:12:{post_id}:{prompt_type}"),
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"media:{post_id}")],
+    ])
+
+
+def media_upload_done_kb(post_id: int) -> InlineKeyboardMarkup:
+    """Кнопка завершения загрузки медиа"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Готово", callback_data=f"media_upload_done:{post_id}")],
+    ])
+
+
+# ===== ПРОФИЛЬ / НАСТРОЙКИ =====
+
+def profile_settings_kb(auto_cover: bool) -> InlineKeyboardMarkup:
+    """Кнопки настроек в профиле"""
+    cover_text = "🖼 Авто-обложка: ВКЛ" if auto_cover else "🖼 Авто-обложка: ВЫКЛ"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=cover_text, callback_data="toggle_auto_cover")],
     ])
 
 

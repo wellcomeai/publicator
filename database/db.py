@@ -144,6 +144,17 @@ async def _create_tables():
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
         
+        -- Настройки пользователя
+        CREATE TABLE IF NOT EXISTS user_settings (
+            id SERIAL PRIMARY KEY,
+            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            auto_cover BOOLEAN DEFAULT FALSE,
+            default_image_style VARCHAR(100) DEFAULT '',
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(user_id)
+        );
+
         -- Индексы
         CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users(chat_id);
         CREATE INDEX IF NOT EXISTS idx_channels_user_id ON channels(user_id);
@@ -153,6 +164,7 @@ async def _create_tables():
         CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id);
         CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
         CREATE INDEX IF NOT EXISTS idx_token_usage_user_id ON token_usage(user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
         
         """)
         logger.info("✅ Database tables created/verified")

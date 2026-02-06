@@ -23,6 +23,7 @@ from bot.handlers import (
     start_handler,
     agent_handler,
     channel_handler,
+    media_handler,
     content_handler,
     profile_handler,
     payment_handler,
@@ -44,6 +45,7 @@ dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(start_handler.router)
 dp.include_router(agent_handler.router)
 dp.include_router(channel_handler.router)
+dp.include_router(media_handler.router)      # До content_handler — обрабатывает MediaManagement states
 dp.include_router(content_handler.router)
 dp.include_router(profile_handler.router)
 dp.include_router(payment_handler.router)
