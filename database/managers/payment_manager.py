@@ -1,7 +1,9 @@
 """Менеджер платежей (Robokassa)"""
 
+import json
 import hashlib
 import structlog
+from urllib.parse import quote
 from typing import Optional, Dict, Any
 from database.db import get_pool
 from config.settings import config
@@ -29,11 +31,13 @@ class PaymentManager:
         """Подтвердить платёж"""
         pool = await get_pool()
         async with pool.acquire() as conn:
+            # asyncpg требует JSON-строку для JSONB полей
+            robokassa_json = json.dumps(robokassa_data) if robokassa_data else None
             row = await conn.fetchrow("""
                 UPDATE payments SET status = 'success', robokassa_data = $2, updated_at = NOW()
                 WHERE id = $1 AND status = 'pending'
                 RETURNING *
-            """, inv_id, robokassa_data)
+            """, inv_id, robokassa_json)
             if row:
                 logger.info("✅ Payment confirmed", inv_id=inv_id)
                 return dict(row)
@@ -53,23 +57,36 @@ class PaymentManager:
         password1 = config.ROBOKASSA_PASSWORD1
         is_test = config.ROBOKASSA_TEST_MODE
 
-        # Формируем подпись: login:amount:inv_id:password1
-        signature_str = f"{login}:{amount_rub}:{inv_id}:{password1}"
+        if not login:
+            logger.error("❌ ROBOKASSA_LOGIN is empty! Check environment variables.")
+
+        # OutSum в формате с копейками
+        out_sum = f"{amount_rub:.2f}"
+
+        # Подпись: login:OutSum:InvId:Password1
+        signature_str = f"{login}:{out_sum}:{inv_id}:{password1}"
         signature = hashlib.md5(signature_str.encode()).hexdigest()
+
+        # URL-encode описание
+        encoded_desc = quote(description, safe="")
 
         base_url = "https://auth.robokassa.ru/Merchant/Index.aspx"
         params = (
             f"MerchantLogin={login}"
-            f"&OutSum={amount_rub}"
+            f"&OutSum={out_sum}"
             f"&InvId={inv_id}"
-            f"&Description={description}"
+            f"&Description={encoded_desc}"
             f"&SignatureValue={signature}"
             f"&Culture=ru"
         )
         if is_test:
             params += "&IsTest=1"
 
-        return f"{base_url}?{params}"
+        url = f"{base_url}?{params}"
+        logger.info("💳 Robokassa URL generated",
+                     inv_id=inv_id, amount=out_sum, is_test=is_test,
+                     has_login=bool(login))
+        return url
 
     @staticmethod
     def verify_robokassa_signature(out_sum: str, inv_id: str, signature: str, password2: str = None) -> bool:
