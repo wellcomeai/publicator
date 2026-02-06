@@ -1,6 +1,7 @@
 """Хэндлер расписания публикаций"""
 
 import structlog
+from html import escape as html_escape
 from datetime import datetime, timezone, timedelta
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
@@ -228,11 +229,17 @@ async def show_schedule(message: Message, state: FSMContext):
         time_str = msk_time.strftime("%d.%m %H:%M МСК")
 
         post_text = item.get("final_text") or item.get("generated_text") or ""
-        preview = post_text[:60] + "..." if len(post_text) > 60 else post_text
+        # Экранируем HTML из контента GPT, чтобы не ломать разметку
+        clean_text = html_escape(post_text)
+        preview = clean_text[:60] + "..." if len(clean_text) > 60 else clean_text
 
         text += f"{i}. 📅 {time_str}\n<i>{preview}</i>\n\n"
 
-    await message.answer(text, parse_mode="HTML", reply_markup=scheduled_list_kb(scheduled))
+    try:
+        await message.answer(text, parse_mode="HTML", reply_markup=scheduled_list_kb(scheduled))
+    except Exception:
+        # Fallback без HTML если всё равно что-то сломается
+        await message.answer(text, parse_mode=None, reply_markup=scheduled_list_kb(scheduled))
 
 
 # ===== ОТМЕНА ЗАПЛАНИРОВАННОГО =====
