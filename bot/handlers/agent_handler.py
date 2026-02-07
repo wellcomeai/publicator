@@ -1,7 +1,7 @@
 """Хэндлер ИИ-агента"""
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from database.managers.user_manager import UserManager
@@ -114,19 +114,38 @@ async def agent_instructions_received(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "agent:edit")
 async def agent_edit_start(callback: CallbackQuery, state: FSMContext):
+    """Редактирование промта — показываем текущий и предлагаем варианты"""
     await callback.answer()
-    await state.set_state(AgentSetup.waiting_instructions)
-    
+
     user = await UserManager.get_by_chat_id(callback.from_user.id)
     agent = await AgentManager.get_agent(user["id"])
-    
+
     # Сохраняем имя для обновления
     await state.update_data(agent_name=agent["agent_name"])
-    
+    await state.set_state(AgentSetup.waiting_instructions)
+
     await callback.message.answer(
-        f"✏️ Текущий промт:\n<i>{agent['instructions'][:500]}</i>\n\n"
-        f"Введите новый промт:",
-        parse_mode="HTML"
+        f"✏️ <b>Редактирование промта</b>\n\n"
+        f"<b>Текущий промт:</b>\n"
+        f"<i>{agent['instructions'][:500]}{'...' if len(agent['instructions']) > 500 else ''}</i>\n\n"
+        f"Отправьте новый промт для замены.\n\n"
+        f"💡 <i>Совет: опишите тему канала, стиль, аудиторию и тон.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Выбрать из шаблонов", callback_data="agent:edit_from_presets")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+        ])
+    )
+
+
+@router.callback_query(F.data == "agent:edit_from_presets")
+async def agent_edit_from_presets(callback: CallbackQuery, state: FSMContext):
+    """Переход к выбору пресетов при редактировании"""
+    await callback.answer()
+    await state.set_state(Onboarding.choosing_preset)
+    await callback.message.answer(
+        "📋 Выберите тип контента:",
+        reply_markup=preset_choice_kb()
     )
 
 

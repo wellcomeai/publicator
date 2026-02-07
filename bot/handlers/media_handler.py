@@ -195,9 +195,15 @@ async def media_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
     post_id = int(callback.data.split(":")[1])
 
+    # Удаляем сообщение с кнопками поста
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
     post = await PostManager.get_post(post_id)
     if not post:
-        await callback.message.answer("❌ Пост не найден.")
+        await bot.send_message(callback.from_user.id, "❌ Пост не найден.")
         return
 
     media_info = post.get("media_info")
@@ -216,7 +222,7 @@ async def media_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await state.set_state(MediaManagement.menu)
     await state.update_data(current_post_id=post_id)
 
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=media_actions_kb(post_id, items_count))
+    await bot.send_message(callback.from_user.id, text, parse_mode="HTML", reply_markup=media_actions_kb(post_id, items_count))
 
 
 @router.callback_query(F.data.startswith("media_done:"))
@@ -295,10 +301,11 @@ async def media_gen_image_auto(callback: CallbackQuery, state: FSMContext, bot: 
         await callback.message.answer(f"⚠️ {result['message']}")
         return
 
-    items_count = PostMediaManager.get_items_count(result)
-    await callback.message.answer(
-        f"✅ Картинка добавлена! (всего медиа: {items_count})",
-        reply_markup=media_actions_kb(post_id, items_count),
+    await send_live_preview(
+        bot=bot, chat_id=callback.from_user.id, post_id=post_id,
+        state=state,
+        reply_markup=media_actions_kb(post_id, PostMediaManager.get_items_count(result)),
+        prefix="🖼", label="Медиа обновлено",
     )
 
 
@@ -370,11 +377,12 @@ async def media_gen_image_custom(message: Message, state: FSMContext, bot: Bot):
         await state.set_state(MediaManagement.menu)
         return
 
-    items_count = PostMediaManager.get_items_count(result)
     await state.set_state(MediaManagement.menu)
-    await message.answer(
-        f"✅ Картинка добавлена! (всего медиа: {items_count})",
-        reply_markup=media_actions_kb(post_id, items_count),
+    await send_live_preview(
+        bot=bot, chat_id=message.from_user.id, post_id=post_id,
+        state=state,
+        reply_markup=media_actions_kb(post_id, PostMediaManager.get_items_count(result)),
+        prefix="🖼", label="Медиа обновлено",
     )
 
 
@@ -470,10 +478,11 @@ async def media_video_duration_selected(callback: CallbackQuery, state: FSMConte
             await callback.message.answer(f"⚠️ {result['message']}")
             return
 
-        items_count = PostMediaManager.get_items_count(result)
-        await callback.message.answer(
-            f"✅ Видео добавлено! (всего медиа: {items_count})",
-            reply_markup=media_actions_kb(post_id, items_count),
+        await send_live_preview(
+            bot=bot, chat_id=callback.from_user.id, post_id=post_id,
+            state=state,
+            reply_markup=media_actions_kb(post_id, PostMediaManager.get_items_count(result)),
+            prefix="🎬", label="Медиа обновлено",
         )
     else:
         # Ждём пользовательский промт
@@ -540,11 +549,12 @@ async def media_gen_video_custom(message: Message, state: FSMContext, bot: Bot):
         await state.set_state(MediaManagement.menu)
         return
 
-    items_count = PostMediaManager.get_items_count(result)
     await state.set_state(MediaManagement.menu)
-    await message.answer(
-        f"✅ Видео добавлено! (всего медиа: {items_count})",
-        reply_markup=media_actions_kb(post_id, items_count),
+    await send_live_preview(
+        bot=bot, chat_id=message.from_user.id, post_id=post_id,
+        state=state,
+        reply_markup=media_actions_kb(post_id, PostMediaManager.get_items_count(result)),
+        prefix="🎬", label="Медиа обновлено",
     )
 
 
@@ -591,11 +601,11 @@ async def media_upload_photo(message: Message, state: FSMContext, bot: Bot):
         await message.answer(f"⚠️ {result['message']}")
         return
 
-    items_count = PostMediaManager.get_items_count(result)
-    await message.answer(
-        f"✅ Фото добавлено! (всего: {items_count}/10)\n"
-        f"Отправьте ещё или нажмите «✅ Готово».",
+    await send_live_preview(
+        bot=bot, chat_id=message.from_user.id, post_id=post_id,
+        state=state,
         reply_markup=media_upload_done_kb(post_id),
+        prefix="🖼", label="Медиа обновлено",
     )
 
 
@@ -621,11 +631,11 @@ async def media_upload_video(message: Message, state: FSMContext, bot: Bot):
         await message.answer(f"⚠️ {result['message']}")
         return
 
-    items_count = PostMediaManager.get_items_count(result)
-    await message.answer(
-        f"✅ Видео добавлено! (всего: {items_count}/10)\n"
-        f"Отправьте ещё или нажмите «✅ Готово».",
+    await send_live_preview(
+        bot=bot, chat_id=message.from_user.id, post_id=post_id,
+        state=state,
         reply_markup=media_upload_done_kb(post_id),
+        prefix="🖼", label="Медиа обновлено",
     )
 
 
@@ -651,11 +661,11 @@ async def media_upload_animation(message: Message, state: FSMContext, bot: Bot):
         await message.answer(f"⚠️ {result['message']}")
         return
 
-    items_count = PostMediaManager.get_items_count(result)
-    await message.answer(
-        f"✅ GIF добавлен! (всего: {items_count}/10)\n"
-        f"Отправьте ещё или нажмите «✅ Готово».",
+    await send_live_preview(
+        bot=bot, chat_id=message.from_user.id, post_id=post_id,
+        state=state,
         reply_markup=media_upload_done_kb(post_id),
+        prefix="🖼", label="Медиа обновлено",
     )
 
 
@@ -744,14 +754,9 @@ async def media_delete_process(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(MediaManagement.menu)
     await state.update_data(current_post_id=post_id)
 
-    if items_count == 0:
-        await message.answer(
-            "✅ Медиа удалено. Альбом пуст.",
-            reply_markup=media_actions_kb(post_id, 0),
-        )
-    else:
-        media_list = PostMediaManager.format_media_list(result)
-        await message.answer(
-            f"✅ Медиа удалено!\n\n📎 {media_list}",
-            reply_markup=media_actions_kb(post_id, items_count),
-        )
+    await send_live_preview(
+        bot=bot, chat_id=message.from_user.id, post_id=post_id,
+        state=state,
+        reply_markup=media_actions_kb(post_id, items_count),
+        prefix="🗑", label="Медиа обновлено",
+    )

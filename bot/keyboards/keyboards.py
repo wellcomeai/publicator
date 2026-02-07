@@ -41,7 +41,6 @@ def post_actions_kb(post_id: int, can_schedule: bool = False) -> InlineKeyboardM
         InlineKeyboardButton(text="🖼 Медиа", callback_data=f"media:{post_id}"),
     ])
     buttons.append([
-        InlineKeyboardButton(text="🔄 Похожий", callback_data=f"clone:{post_id}"),
         InlineKeyboardButton(text="🔄 Заново", callback_data=f"regenerate:{post_id}"),
     ])
     buttons.append([

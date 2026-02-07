@@ -291,8 +291,10 @@ async def create_post_generate(message: Message, state: FSMContext, bot: Bot):
             return
         status_msg = await message.answer("⏳ Генерирую пост...")
 
+    full_prompt = f"{prompt}\n\nВАЖНО: пост строго до 900 символов."
+
     result = await openai_service.generate_content(
-        user_prompt=prompt,
+        user_prompt=full_prompt,
         agent_instructions=agent["instructions"],
         model=agent["model"],
     )
@@ -730,6 +732,11 @@ async def regenerate_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
     post_id = int(callback.data.split(":")[1])
 
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     post = await PostManager.get_post(post_id)
     if not post or not post.get("original_text"):
         await callback.message.answer("❌ Невозможно перегенерировать — нет исходного запроса.")
@@ -806,94 +813,6 @@ async def regenerate_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
 
 # ============================================================
-#  4.5. КЛОНИРОВАНИЕ (ПОХОЖИЙ ПОСТ)
-# ============================================================
-
-@router.callback_query(F.data.startswith("clone:"))
-async def clone_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Создать похожий пост — новый текст по той же теме"""
-    await callback.answer()
-    post_id = int(callback.data.split(":")[1])
-
-    post = await PostManager.get_post(post_id)
-    if not post:
-        await callback.message.answer("❌ Пост не найден.")
-        return
-
-    user = await UserManager.get_by_chat_id(callback.from_user.id)
-    if not user:
-        return
-
-    agent = await AgentManager.get_agent(user["id"])
-    if not agent:
-        await callback.message.answer("⚠️ Агент не найден.")
-        return
-
-    has_tokens = await UserManager.has_tokens(callback.from_user.id)
-    if not has_tokens:
-        await callback.message.answer("⚠️ Закончились токены.")
-        return
-
-    status_msg = await callback.message.answer("⏳ Создаю похожий пост...")
-
-    original_text = post.get("original_text") or ""
-    generated_text = post.get("final_text") or post.get("generated_text") or ""
-
-    clone_prompt = (
-        f"Напиши другой вариант поста на ту же тему. "
-        f"Тема: {original_text}\n\n"
-        f"Предыдущий вариант для справки (НЕ копируй, напиши по-другому): "
-        f"{generated_text[:500]}"
-    )
-
-    result = await openai_service.generate_content(
-        user_prompt=clone_prompt,
-        agent_instructions=agent["instructions"],
-        model=agent["model"],
-    )
-
-    if not result["success"]:
-        await status_msg.edit_text(f"❌ Ошибка: {result.get('error', 'Неизвестная ошибка')}")
-        return
-
-    total_tokens = result["total_tokens"]
-    await UserManager.spend_tokens(callback.from_user.id, total_tokens)
-
-    conversation_history = [
-        {"role": "user", "content": clone_prompt},
-        {"role": "assistant", "content": result["text"]},
-    ]
-
-    new_post = await PostManager.create_post(
-        user_id=user["id"],
-        generated_text=result["text"],
-        original_text=original_text,
-        input_tokens=result["input_tokens"],
-        output_tokens=result["output_tokens"],
-        conversation_history=conversation_history,
-    )
-
-    await state.clear()
-    await state.update_data(current_post_id=new_post["id"])
-
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
-
-    await _send_post_preview(
-        bot=bot,
-        chat_id=callback.from_user.id,
-        text=result["text"],
-        media_info=None,
-        reply_markup=post_actions_kb(new_post["id"], can_schedule=_can_schedule(user)),
-        tokens_used=total_tokens,
-        prefix="🔄",
-        label="Похожий пост",
-    )
-
-
-# ============================================================
 #  5. ПУБЛИКАЦИЯ
 # ============================================================
 
@@ -916,6 +835,10 @@ async def publish_post_handler(callback: CallbackQuery, state: FSMContext, bot: 
     post = await PostManager.get_post(post_id)
     if not post:
         await callback.message.answer("❌ Пост не найден.")
+        return
+
+    if post.get("status") == "published":
+        await callback.message.answer("ℹ️ Этот пост уже опубликован.")
         return
 
     # Проверка лимита постов

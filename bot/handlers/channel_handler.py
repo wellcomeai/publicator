@@ -102,14 +102,19 @@ async def channel_forward_received(message: Message, state: FSMContext, bot: Bot
     )
     
     await state.clear()
-    
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
     ch_display = f"@{channel_username}" if channel_username else channel_title
-    await status_msg.edit_text(
+    await message.answer(
         f"✅ Канал <b>{ch_display}</b> привязан!\n\n"
         f"Теперь можете создавать и публиковать контент.",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=main_menu_kb(),
     )
-    await message.answer("Готово!", reply_markup=main_menu_kb())
 
 
 @router.callback_query(F.data == "channel:info")
