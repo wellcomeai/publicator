@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from database.managers.user_manager import UserManager
 from database.managers.agent_manager import AgentManager
 from bot.keyboards.keyboards import main_menu_kb
-from utils.plan_utils import plan_allows_schedule
+from utils.plan_utils import get_menu_flags
 
 router = Router()
 
@@ -55,6 +55,5 @@ async def cmd_start(message: Message, state: FSMContext):
         f"🪙 Токены: {access['tokens_balance']:,}"
     )
 
-    plan = access.get("plan", "free")
-    show_schedule = plan_allows_schedule(plan)
-    await message.answer(text, reply_markup=main_menu_kb(show_schedule=show_schedule), parse_mode="HTML")
+    flags = await get_menu_flags(message.from_user.id)
+    await message.answer(text, reply_markup=main_menu_kb(**flags), parse_mode="HTML")
