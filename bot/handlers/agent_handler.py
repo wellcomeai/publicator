@@ -1,5 +1,7 @@
 """Хэндлер ИИ-агента"""
 
+from html import escape
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -27,10 +29,13 @@ async def my_agent(message: Message, state: FSMContext):
     
     if has_agent:
         agent = await AgentManager.get_agent(user["id"])
+        safe_name = escape(agent['agent_name'])
+        safe_instructions = escape(agent['instructions'][:300])
+        ellipsis = '...' if len(agent['instructions']) > 300 else ''
         text = (
-            f"🤖 <b>{agent['agent_name']}</b>\n\n"
-            f"📝 <b>Промт:</b>\n<i>{agent['instructions'][:300]}{'...' if len(agent['instructions']) > 300 else ''}</i>\n\n"
-            f"🧠 Модель: {agent['model']}"
+            f"🤖 <b>{safe_name}</b>\n\n"
+            f"📝 <b>Промт:</b>\n<i>{safe_instructions}{ellipsis}</i>\n\n"
+            f"🧠 Модель: {escape(agent['model'])}"
         )
     else:
         text = (
@@ -67,7 +72,7 @@ async def agent_name_received(message: Message, state: FSMContext):
     await state.set_state(AgentSetup.waiting_instructions)
     
     await message.answer(
-        f"✅ Название: <b>{name}</b>\n\n"
+        f"✅ Название: <b>{escape(name)}</b>\n\n"
         f"Теперь введите <b>промт</b> — инструкции для ИИ.\n\n"
         f"Опишите:\n"
         f"• Тему и стиль канала\n"
@@ -105,7 +110,7 @@ async def agent_instructions_received(message: Message, state: FSMContext):
     
     flags = await get_menu_flags(message.from_user.id)
     await message.answer(
-        f"✅ Агент <b>{agent['agent_name']}</b> создан!\n\n"
+        f"✅ Агент <b>{escape(agent['agent_name'])}</b> создан!\n\n"
         f"Теперь привяжите канал (📢 Мой канал) и начинайте создавать контент.",
         reply_markup=main_menu_kb(**flags),
         parse_mode="HTML"
@@ -126,10 +131,13 @@ async def agent_edit_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(agent_name=agent["agent_name"])
     await state.set_state(AgentSetup.waiting_instructions)
 
+    safe_instructions = escape(agent['instructions'][:500])
+    ellipsis = '...' if len(agent['instructions']) > 500 else ''
+
     await callback.message.answer(
         f"✏️ <b>Редактирование промта</b>\n\n"
         f"<b>Текущий промт:</b>\n"
-        f"<i>{agent['instructions'][:500]}{'...' if len(agent['instructions']) > 500 else ''}</i>\n\n"
+        f"<i>{safe_instructions}{ellipsis}</i>\n\n"
         f"Отправьте новый промт для замены.\n\n"
         f"💡 <i>Совет: опишите тему канала, стиль, аудиторию и тон.</i>",
         parse_mode="HTML",
@@ -164,9 +172,9 @@ async def agent_info(callback: CallbackQuery):
         return
     
     text = (
-        f"🤖 <b>{agent['agent_name']}</b>\n\n"
-        f"📝 <b>Промт:</b>\n{agent['instructions']}\n\n"
-        f"🧠 Модель: {agent['model']}\n"
+        f"🤖 <b>{escape(agent['agent_name'])}</b>\n\n"
+        f"📝 <b>Промт:</b>\n{escape(agent['instructions'])}\n\n"
+        f"🧠 Модель: {escape(agent['model'])}\n"
         f"📅 Создан: {agent['created_at'].strftime('%d.%m.%Y %H:%M')}"
     )
     await callback.message.answer(text, parse_mode="HTML")
