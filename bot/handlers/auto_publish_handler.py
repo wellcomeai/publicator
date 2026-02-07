@@ -1,12 +1,11 @@
 """Хэндлер меню авто-публикации + расписание + настройки"""
 
 import json
-import re
 import structlog
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from database.managers.user_manager import UserManager
@@ -20,6 +19,8 @@ from bot.keyboards.keyboards import (
     main_menu_kb,
     auto_publish_menu_kb,
     schedule_days_kb,
+    schedule_times_kb,
+    schedule_times_night_kb,
     auto_publish_settings_kb,
     review_post_kb,
 )
@@ -161,15 +162,17 @@ async def schedule_setup(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка", show_alert=True)
         return
 
-    # Load existing selected days
+    # Load existing selected days and times
     settings = await AutoPublishManager.get_settings(user["id"])
     selected_days = []
+    selected_times = []
     if settings and settings.get("schedule"):
         slots = settings["schedule"].get("slots", [])
-        selected_days = list(set(s["day"] for s in slots))
+        selected_days = sorted(set(s["day"] for s in slots))
+        selected_times = sorted(set(s["time"] for s in slots))
 
     await state.set_state(AutoPublishSetup.choosing_days)
-    await state.update_data(selected_days=selected_days)
+    await state.update_data(selected_days=selected_days, selected_times=selected_times)
 
     await callback.message.edit_text(
         "Выберите дни публикаций (нажмите для переключения):",
@@ -204,7 +207,7 @@ async def toggle_day(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "autopub_days_done", AutoPublishSetup.choosing_days)
 async def days_done(callback: CallbackQuery, state: FSMContext):
-    """Дни выбраны, запрашиваем время"""
+    """Дни выбраны, переходим к выбору времени кнопками"""
     data = await state.get_data()
     selected_days = data.get("selected_days", [])
 
@@ -212,74 +215,112 @@ async def days_done(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Выберите хотя бы один день!", show_alert=True)
         return
 
+    await state.set_state(AutoPublishSetup.entering_times)
+
+    # Load existing selected times if any
+    selected_times = data.get("selected_times", [])
+
+    await callback.message.edit_text(
+        "⏰ Выберите время публикаций (МСК):\n\n"
+        "Нажимайте на кнопки для выбора/отмены.",
+        reply_markup=schedule_times_kb(selected_times),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("autopub_time:"), AutoPublishSetup.entering_times)
+async def toggle_time(callback: CallbackQuery, state: FSMContext):
+    """Toggle времени публикации"""
+    time_str = callback.data.removeprefix("autopub_time:")  # "HH:MM"
+
+    data = await state.get_data()
+    selected_times = data.get("selected_times", [])
+
     # Check plan limits
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
     plan = user.get("plan", "free") if user else "free"
     limits = get_auto_publish_limits(plan)
-
-    await state.set_state(AutoPublishSetup.entering_times)
-
-    max_note = ""
     max_slots = limits.get("max_slots_per_day")
-    if max_slots and max_slots == 1:
-        max_note = "\n\n⚠️ На тарифе Стартер — максимум 1 время."
 
-    await callback.message.edit_text(
-        f"В какое время публиковать? (МСК)\n\n"
-        f"Введите время через запятую.\n"
-        f"Примеры: 10:00  или  10:00, 18:00  или  09:00, 14:00, 20:00"
-        f"{max_note}"
-    )
+    if time_str in selected_times:
+        selected_times.remove(time_str)
+    else:
+        if max_slots and len(selected_times) >= max_slots:
+            await callback.answer(
+                f"⚠️ На тарифе Стартер максимум {max_slots} время в день. Обновите до Про.",
+                show_alert=True,
+            )
+            return
+        selected_times.append(time_str)
+        selected_times.sort()
+
+    await state.update_data(selected_times=selected_times)
+
+    # Determine which screen to show (day or night)
+    h = int(time_str.split(":")[0])
+    if h < 8:
+        kb = schedule_times_night_kb(selected_times)
+    else:
+        kb = schedule_times_kb(selected_times)
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=kb)
+    except Exception:
+        pass
     await callback.answer()
 
 
-@router.message(AutoPublishSetup.entering_times)
-async def process_times(message: Message, state: FSMContext, bot: Bot):
-    """Обработка введённого времени"""
-    text = message.text.strip()
-
-    # Parse times
-    time_pattern = re.compile(r"(\d{1,2}):(\d{2})")
-    matches = time_pattern.findall(text)
-
-    if not matches:
-        await message.answer(
-            "⚠️ Не удалось распознать время. Введите в формате ЧЧ:ММ.\n"
-            "Примеры: 10:00  или  10:00, 18:00"
-        )
-        return
-
-    times = []
-    for h, m in matches:
-        h, m = int(h), int(m)
-        if 0 <= h <= 23 and 0 <= m <= 59:
-            times.append(f"{h:02d}:{m:02d}")
-
-    if not times:
-        await message.answer("⚠️ Неверный формат времени.")
-        return
-
-    # Check plan limits
-    chat_id = message.from_user.id
-    user = await UserManager.get_by_chat_id(chat_id)
-    plan = user.get("plan", "free") if user else "free"
-    limits = get_auto_publish_limits(plan)
-
-    max_slots = limits.get("max_slots_per_day")
-    if max_slots and len(times) > max_slots:
-        times = times[:max_slots]
-        await message.answer(
-            f"⚠️ На тарифе Стартер максимум {max_slots} время в день. Оставлено: {', '.join(times)}"
-        )
-
+@router.callback_query(F.data == "autopub_time_night", AutoPublishSetup.entering_times)
+async def show_night_times(callback: CallbackQuery, state: FSMContext):
+    """Показать ночные часы 00:00-07:00"""
     data = await state.get_data()
+    selected_times = data.get("selected_times", [])
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=schedule_times_night_kb(selected_times)
+        )
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data == "autopub_time_day", AutoPublishSetup.entering_times)
+async def show_day_times(callback: CallbackQuery, state: FSMContext):
+    """Показать дневные часы 08:00-23:00"""
+    data = await state.get_data()
+    selected_times = data.get("selected_times", [])
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=schedule_times_kb(selected_times)
+        )
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data == "autopub_times_done", AutoPublishSetup.entering_times)
+async def on_times_done(callback: CallbackQuery, state: FSMContext):
+    """Время выбрано — сохраняем расписание"""
+    data = await state.get_data()
+    selected_times = data.get("selected_times", [])
+
+    if not selected_times:
+        await callback.answer("Выберите хотя бы одно время!", show_alert=True)
+        return
+
     selected_days = data.get("selected_days", [])
+
+    chat_id = callback.from_user.id
+    user = await UserManager.get_by_chat_id(chat_id)
+    if not user:
+        await callback.answer("Ошибка", show_alert=True)
+        return
 
     # Build schedule
     slots = []
     for day in selected_days:
-        for time_str in times:
+        for time_str in selected_times:
             slots.append({"day": day, "time": time_str})
 
     schedule = {
@@ -298,22 +339,20 @@ async def process_times(message: Message, state: FSMContext, bot: Bot):
 
     # Format confirmation
     day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-    lines = []
-    for day in selected_days:
-        lines.append(f"  {day_names[day]} — {', '.join(times)}")
+    days_text = ", ".join([day_names[d] for d in sorted(selected_days)])
+    times_text = ", ".join(selected_times)
+    total_per_week = len(selected_days) * len(selected_times)
 
-    total_per_week = len(selected_days) * len(times)
-
-    from bot.keyboards.keyboards import content_plan_menu_kb
-    text = (
-        f"✅ Расписание настроено!\n\n"
-        f"📅 Публикации:\n"
-        + "\n".join(lines) +
-        f"\n  = {total_per_week} постов в неделю\n"
+    await callback.message.edit_text(
+        f"✅ Расписание сохранено!\n\n"
+        f"📅 Дни: {days_text}\n"
+        f"⏰ Время: {times_text}\n"
+        f"= {total_per_week} постов в неделю",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")]
+        ]),
     )
-
-    flags = await get_menu_flags(chat_id)
-    await message.answer(text, reply_markup=main_menu_kb(**flags))
+    await callback.answer()
 
 
 # ============================================================
@@ -473,15 +512,43 @@ async def toggle_auto_publish(callback: CallbackQuery, state: FSMContext):
         return
 
     ready_count = await ContentQueueManager.get_queue_count(user_id, status="ready")
-    if ready_count == 0:
-        await callback.answer("⚠️ Сгенерируйте контент-план", show_alert=True)
+    on_empty = settings.get("on_empty", "pause")
+
+    if ready_count == 0 and on_empty != "auto_generate":
+        await callback.answer(
+            "Добавьте посты в контент-план или включите авто-генерацию в настройках ⚙️",
+            show_alert=True,
+        )
         return
 
     await AutoPublishManager.set_active(user_id, True)
 
     # Get next slot time
     next_slot = await AutoPublishManager.get_next_slot_time(user_id)
-    if next_slot:
+
+    if ready_count == 0 and on_empty == "auto_generate":
+        # Включаем с авто-генерацией, без контент-плана
+        if next_slot:
+            tz = ZoneInfo("Europe/Moscow")
+            next_msk = next_slot.astimezone(tz)
+            msg = (
+                f"✅ Авто-публикация включена!\n\n"
+                f"🤖 Режим: авто-генерация\n"
+                f"Бот будет сам создавать посты по промту вашего агента в назначенное время.\n\n"
+                f"Следующий пост: {next_msk.strftime('%a %d.%m %H:%M')} МСК"
+            )
+        else:
+            msg = (
+                "✅ Авто-публикация включена!\n\n"
+                "🤖 Режим: авто-генерация\n"
+                "Бот будет сам создавать посты по промту вашего агента в назначенное время."
+            )
+        try:
+            await callback.message.answer(msg)
+        except Exception:
+            pass
+        await callback.answer()
+    elif next_slot:
         tz = ZoneInfo("Europe/Moscow")
         next_msk = next_slot.astimezone(tz)
         await callback.answer(

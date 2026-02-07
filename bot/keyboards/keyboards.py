@@ -267,7 +267,7 @@ def schedule_days_kb(selected_days: list) -> InlineKeyboardMarkup:
     row1 = []
     row2 = []
     for i, name in enumerate(day_names):
-        check = "☑️" if i in selected_days else "☐"
+        check = "✅" if i in selected_days else "⬜"
         btn = InlineKeyboardButton(text=f"{check} {name}", callback_data=f"autopub_day:{i}")
         if i < 4:
             row1.append(btn)
@@ -276,6 +276,64 @@ def schedule_days_kb(selected_days: list) -> InlineKeyboardMarkup:
     buttons = [row1, row2]
     buttons.append([
         InlineKeyboardButton(text="✅ Далее", callback_data="autopub_days_done"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="autopub:menu"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def schedule_times_kb(selected_times: list) -> InlineKeyboardMarkup:
+    """Выбор времени публикаций кнопками (08:00-23:00)"""
+    buttons = []
+    hours = list(range(8, 24))
+    row = []
+    for h in hours:
+        time_str = f"{h:02d}:00"
+        check = "✅" if time_str in selected_times else ""
+        label = f"{check} {time_str}" if check else time_str
+        row.append(InlineKeyboardButton(
+            text=label,
+            callback_data=f"autopub_time:{time_str}"
+        ))
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton(text="🌙 00:00–07:00", callback_data="autopub_time_night")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="✅ Готово", callback_data="autopub_times_done"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="autopub:menu"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def schedule_times_night_kb(selected_times: list) -> InlineKeyboardMarkup:
+    """Ночные часы 00:00-07:00"""
+    buttons = []
+    hours = list(range(0, 8))
+    row = []
+    for h in hours:
+        time_str = f"{h:02d}:00"
+        check = "✅" if time_str in selected_times else ""
+        label = f"{check} {time_str}" if check else time_str
+        row.append(InlineKeyboardButton(
+            text=label,
+            callback_data=f"autopub_time:{time_str}"
+        ))
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton(text="☀️ 08:00–23:00", callback_data="autopub_time_day")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="✅ Готово", callback_data="autopub_times_done"),
         InlineKeyboardButton(text="❌ Отмена", callback_data="autopub:menu"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
