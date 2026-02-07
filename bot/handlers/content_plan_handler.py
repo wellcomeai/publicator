@@ -5,7 +5,7 @@ import structlog
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InputMediaPhoto
+from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from database.managers.user_manager import UserManager
@@ -24,6 +24,7 @@ from services.whisper_service import transcribe_voice
 from bot.states.states import ContentPlan
 from bot.keyboards.keyboards import (
     content_plan_menu_kb,
+    plan_topics_prompt_kb,
     generate_plan_covers_kb,
     carousel_kb,
     carousel_edit_text_kb,
@@ -133,8 +134,6 @@ async def content_plan_menu(callback: CallbackQuery, state: FSMContext):
 
     user_id = user["id"]
     total = await ContentQueueManager.get_active_queue_count(user_id)
-    ready = await ContentQueueManager.get_queue_count(user_id, status="ready")
-    pending = await ContentQueueManager.get_queue_count(user_id, status="pending")
 
     # Estimate days coverage
     settings = await AutoPublishManager.get_settings(user_id)
@@ -150,8 +149,12 @@ async def content_plan_menu(callback: CallbackQuery, state: FSMContext):
 
     text = (
         f"📋 <b>Контент-план</b>\n\n"
-        f"В очереди: {total} постов ({ready} ready, {pending} pending)"
-        f"{days_coverage}"
+        f"В очереди: {total} постов"
+        f"{days_coverage}\n\n"
+        f"<b>Что здесь можно:</b>\n"
+        f"🤖 <b>Сгенерировать план с ИИ</b> — ИИ предложит темы на 7 дней, вы обсудите и подтвердите\n"
+        f"📝 <b>Добавить тему</b> — вручную добавить тему, пост сгенерируется автоматически\n"
+        f"📄 <b>Мои посты</b> — просмотр, редактирование и управление очередью"
     )
 
     await callback.message.edit_text(
@@ -168,7 +171,7 @@ async def content_plan_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cplan:generate")
 async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
-    """Начало генерации AI-плана → открываем диалог с ИИ"""
+    """Начало генерации AI-плана → приветствие + вопрос о темах"""
     await _safe_callback_answer(callback)
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
@@ -215,20 +218,65 @@ async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
         f"{day_names[s['day']]} {s['time']}" for s in sorted(slots, key=lambda x: (x["day"], x["time"]))
     ])
 
+    # Этап 1: Приветствие + вопрос о темах
+    welcome_text = (
+        f"🧠 <b>Привет! Я — твой контент-стратег.</b>\n\n"
+        f"Помогу составить контент-план на <b>7 дней</b> для твоего канала.\n\n"
+        f"<b>Как это работает:</b>\n"
+        f"1️⃣ Я предложу темы, учитывая стиль твоего канала\n"
+        f"2️⃣ Мы вместе обсудим и скорректируем план\n"
+        f"3️⃣ После подтверждения — автоматически сгенерирую все посты\n\n"
+        f"📅 Расписание: {schedule_info}\n"
+        f"📝 Слотов для публикаций: {slots_count}\n\n"
+        f"💡 <b>Есть темы, которые хочешь осветить?</b>\n"
+        f"Напиши их сейчас — я учту при составлении плана.\n"
+        f"Или нажми кнопку ниже, чтобы я предложил темы сам."
+    )
+
+    await callback.message.edit_text(
+        welcome_text,
+        parse_mode="HTML",
+        reply_markup=plan_topics_prompt_kb()
+    )
+
+    # Сохраняем данные для последующего запуска сессии
+    await state.set_state(ContentPlan.waiting_user_topics)
+    await state.update_data(
+        plan_user_id=user["id"],
+        plan_agent_instructions=agent["instructions"],
+        plan_channel_name=channel.get("channel_title", "канал"),
+        plan_slots_count=slots_count,
+        plan_schedule_info=schedule_info,
+    )
+
+
+async def _launch_plan_session(
+    chat_id: int,
+    state: FSMContext,
+    status_msg,
+    user_topics: str = ""
+):
+    """Запуск сессии планирования (общий код для обоих сценариев)"""
+    data = await state.get_data()
+    user_id = data.get("plan_user_id")
+    agent_instructions = data.get("plan_agent_instructions", "")
+    channel_name = data.get("plan_channel_name", "канал")
+    slots_count = data.get("plan_slots_count", 7)
+    schedule_info = data.get("plan_schedule_info", "")
+
     now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
     current_date = now_msk.strftime("%d.%m.%Y (%A)")
-
-    status_msg = await callback.message.edit_text("⏳ Запускаю планирование...")
 
     try:
         first_reply, session_id = await PlanChatService.start_session(
             chat_id=chat_id,
-            user_id=user["id"],
-            agent_instructions=agent["instructions"],
-            channel_name=channel.get("channel_title", "канал"),
+            user_id=user_id,
+            agent_instructions=agent_instructions,
+            channel_name=channel_name,
             slots_count=slots_count,
             schedule_info=schedule_info,
-            current_date=current_date
+            current_date=current_date,
+            user_topics=user_topics
         )
 
         # Сохраняем session_id в FSM
@@ -248,6 +296,75 @@ async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
             "❌ Ошибка запуска диалога. Попробуйте позже.",
             reply_markup=content_plan_menu_kb()
         )
+
+
+@router.message(ContentPlan.waiting_user_topics)
+async def handle_user_topics(message: Message, state: FSMContext):
+    """Сценарий A: пользователь прислал текст с темами"""
+    chat_id = message.from_user.id
+    user_topics = message.text
+    if not user_topics:
+        await message.answer("⚠️ Отправьте темы текстом.")
+        return
+
+    await state.update_data(user_topics=user_topics)
+    status_msg = await message.answer("⏳ Формирую предложения с учётом ваших тем...")
+
+    await _launch_plan_session(chat_id, state, status_msg, user_topics=user_topics)
+
+
+@router.callback_query(F.data == "cplan_skip_topics")
+async def cb_skip_topics(callback: CallbackQuery, state: FSMContext):
+    """Сценарий B: пользователь нажал «Предложи темы сам»"""
+    await _safe_callback_answer(callback)
+
+    status_msg = await callback.message.edit_text("⏳ Формирую предложения...")
+    chat_id = callback.from_user.id
+
+    await _launch_plan_session(chat_id, state, status_msg)
+
+
+@router.callback_query(F.data == "cplan_back_to_menu")
+async def cb_back_to_menu(callback: CallbackQuery, state: FSMContext):
+    """Сценарий C: пользователь нажал «Назад» — возврат в меню"""
+    await _safe_callback_answer(callback)
+    await state.clear()
+
+    # Перенаправляем в меню контент-плана
+    chat_id = callback.from_user.id
+    user = await UserManager.get_by_chat_id(chat_id)
+    if not user:
+        return
+
+    user_id = user["id"]
+    total = await ContentQueueManager.get_active_queue_count(user_id)
+
+    settings = await AutoPublishManager.get_settings(user_id)
+    slots_per_week = 0
+    if settings and settings.get("schedule"):
+        slots_per_week = len(settings["schedule"].get("slots", []))
+    days_coverage = ""
+    if slots_per_week > 0 and total > 0:
+        slots_per_day = slots_per_week / 7
+        if slots_per_day > 0:
+            days = int(total / slots_per_day)
+            days_coverage = f"\nТем хватит на: ~{days} дней"
+
+    text = (
+        f"📋 <b>Контент-план</b>\n\n"
+        f"В очереди: {total} постов"
+        f"{days_coverage}\n\n"
+        f"<b>Что здесь можно:</b>\n"
+        f"🤖 <b>Сгенерировать план с ИИ</b> — ИИ предложит темы на 7 дней, вы обсудите и подтвердите\n"
+        f"📝 <b>Добавить тему</b> — вручную добавить тему, пост сгенерируется автоматически\n"
+        f"📄 <b>Мои посты</b> — просмотр, редактирование и управление очередью"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=content_plan_menu_kb(),
+        parse_mode="HTML",
+    )
 
 
 # ============================================================
@@ -892,6 +1009,42 @@ async def carousel_navigate(callback: CallbackQuery, state: FSMContext, bot: Bot
 
     user_id = user["id"]
 
+    if action == "goto":
+        # Переход к конкретному посту — запрашиваем номер
+        total = await ContentQueueManager.get_active_queue_count(user_id)
+        if total <= 1:
+            await _safe_callback_answer(callback, "В очереди только 1 пост", show_alert=True)
+            return
+
+        await state.set_state(ContentPlan.goto_position)
+        await state.update_data(goto_total=total, goto_current=current)
+
+        cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="cplan_nav:goto_cancel")]
+        ])
+
+        try:
+            await callback.message.edit_text(
+                f"🔢 Введите номер поста (1—{total}):",
+                reply_markup=cancel_kb
+            )
+        except Exception:
+            await callback.message.answer(
+                f"🔢 Введите номер поста (1—{total}):",
+                reply_markup=cancel_kb
+            )
+        await _safe_callback_answer(callback)
+        return
+
+    if action == "goto_cancel":
+        # Отмена перехода — возврат к карусели
+        data = await state.get_data()
+        pos = data.get("goto_current", 1)
+        await state.set_state(ContentPlan.browsing_queue)
+        await _show_carousel_item(chat_id, state, pos, user_id, bot)
+        await _safe_callback_answer(callback)
+        return
+
     if action == "prev":
         new_pos = max(1, current - 1)
     elif action == "next":
@@ -918,6 +1071,32 @@ async def carousel_navigate(callback: CallbackQuery, state: FSMContext, bot: Bot
     await state.set_state(ContentPlan.browsing_queue)
     await _show_carousel_item(chat_id, state, new_pos, user_id, bot)
     await _safe_callback_answer(callback)
+
+
+@router.message(ContentPlan.goto_position)
+async def process_goto_position(message: Message, state: FSMContext, bot: Bot):
+    """Обработка ввода номера поста для перехода"""
+    chat_id = message.from_user.id
+    data = await state.get_data()
+    total = data.get("goto_total", 1)
+
+    text = message.text
+    if not text or not text.strip().isdigit():
+        await message.answer(f"❌ Введите число от 1 до {total}")
+        return
+
+    position = int(text.strip())
+    if position < 1 or position > total:
+        await message.answer(f"❌ Введите число от 1 до {total}")
+        return
+
+    user = await UserManager.get_by_chat_id(chat_id)
+    if not user:
+        await state.clear()
+        return
+
+    await state.set_state(ContentPlan.browsing_queue)
+    await _show_carousel_item(chat_id, state, position, user["id"], bot)
 
 
 # ============================================================

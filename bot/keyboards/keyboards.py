@@ -356,10 +356,18 @@ def auto_publish_settings_kb(moderation: str, covers: bool, on_empty: str) -> In
 def content_plan_menu_kb() -> InlineKeyboardMarkup:
     """Меню контент-плана"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🤖 Сгенерировать план", callback_data="cplan:generate")],
+        [InlineKeyboardButton(text="🤖 Сгенерировать план с ИИ", callback_data="cplan:generate")],
         [InlineKeyboardButton(text="📝 Добавить тему", callback_data="cplan:add_topic")],
-        [InlineKeyboardButton(text="📄 Просмотр очереди", callback_data="cplan:browse")],
+        [InlineKeyboardButton(text="📄 Мои посты", callback_data="cplan:browse")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")],
+    ])
+
+
+def plan_topics_prompt_kb() -> InlineKeyboardMarkup:
+    """Клавиатура после приветствия — пропустить или вернуться"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Предложи темы сам", callback_data="cplan_skip_topics")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="cplan_back_to_menu")],
     ])
 
 
@@ -383,6 +391,7 @@ def carousel_kb(queue_id: int, position: int, total: int) -> InlineKeyboardMarku
 
     return InlineKeyboardMarkup(inline_keyboard=[
         nav_row,
+        [InlineKeyboardButton(text="🔢 Перейти к #", callback_data=f"cplan_nav:goto:{position}")],
         [
             InlineKeyboardButton(text="✏️ Текст", callback_data=f"cplan_edit:{queue_id}"),
             InlineKeyboardButton(text="🖼 Обложка", callback_data=f"cplan_cover:{queue_id}"),

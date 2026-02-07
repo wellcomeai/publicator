@@ -36,7 +36,8 @@ class PlanChatService:
         channel_name: str,
         slots_count: int,
         schedule_info: str,
-        current_date: str = ""
+        current_date: str = "",
+        user_topics: str = ""
     ) -> Tuple[str, int]:
         """
         Начать новую сессию диалога.
@@ -54,18 +55,22 @@ class PlanChatService:
             channel_name=channel_name,
             slots_count=slots_count,
             schedule_info=schedule_info,
-            current_date=current_date
+            current_date=current_date,
+            user_topics=user_topics
         )
 
         # Сохраняем system message
         await PlanChatManager.append_message(session_id, "system", system_prompt)
 
         # Первый запрос к ИИ — пусть предложит план
+        first_user_message = "Предложи контент-план"
+        if user_topics:
+            first_user_message = f"Предложи контент-план. Я хочу осветить эти темы: {user_topics}"
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Предложи контент-план"}
+            {"role": "user", "content": first_user_message}
         ]
-        await PlanChatManager.append_message(session_id, "user", "Предложи контент-план")
+        await PlanChatManager.append_message(session_id, "user", first_user_message)
 
         response = await client.chat.completions.create(
             model="gpt-4o",

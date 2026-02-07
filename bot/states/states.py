@@ -52,6 +52,7 @@ class AutoPublishSetup(StatesGroup):
 
 class ContentPlan(StatesGroup):
     """Управление контент-планом"""
+    waiting_user_topics = State()     # Ожидание тем от пользователя перед генерацией
     discussing_plan = State()         # Диалог с ИИ по контент-плану
     browsing_queue = State()          # Просмотр карусели
     editing_post_text = State()       # Редактирование текста поста в очереди
@@ -59,3 +60,4 @@ class ContentPlan(StatesGroup):
     adding_topic = State()            # Ручное добавление темы
     waiting_cover_prompt = State()    # Ожидание промта для обложки
     waiting_cover_upload = State()    # Ожидание загрузки своего фото
+    goto_position = State()           # Ввод номера поста для перехода
