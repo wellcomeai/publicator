@@ -29,8 +29,10 @@ from bot.handlers import (
     profile_handler,
     payment_handler,
     schedule_handler,
+    watcher_handler,
 )
 from services.scheduler_service import run_scheduler
+from services.watcher_scheduler import run_watcher
 from bot.middlewares import AlbumMiddleware
 
 logger = structlog.get_logger()
@@ -52,6 +54,7 @@ dp.include_router(channel_handler.router)
 dp.include_router(media_handler.router)      # До content_handler — обрабатывает MediaManagement states
 dp.include_router(content_handler.router)
 dp.include_router(schedule_handler.router)
+dp.include_router(watcher_handler.router)
 dp.include_router(profile_handler.router)
 dp.include_router(payment_handler.router)
 
@@ -105,11 +108,13 @@ async def lifespan(app: FastAPI):
 
     # Запуск фонового планировщика отложенных постов
     scheduler_task = asyncio.create_task(run_scheduler(bot))
+    watcher_task = asyncio.create_task(run_watcher(bot))
 
     yield
 
     # Shutdown
     scheduler_task.cancel()
+    watcher_task.cancel()
     await bot.delete_webhook()
     await close_db()
     await bot.session.close()

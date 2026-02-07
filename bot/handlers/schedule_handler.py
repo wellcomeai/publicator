@@ -16,6 +16,7 @@ from bot.keyboards.keyboards import (
     schedule_time_presets_kb, scheduled_list_kb, main_menu_kb, cancel_kb
 )
 from config.settings import config
+from utils.plan_utils import plan_allows_watcher
 
 logger = structlog.get_logger()
 router = Router()
@@ -192,7 +193,7 @@ async def _confirm_schedule(message, state, post_id, publish_at, time_display, c
         f"📅 {time_display}\n"
         f"📢 Канал: {ch_display}\n\n"
         f"Управлять расписанием: 📅 Расписание",
-        reply_markup=main_menu_kb(show_schedule=True),
+        reply_markup=main_menu_kb(show_schedule=True, show_watcher=plan_allows_watcher(user.get("plan", "free"))),
         parse_mode="HTML"
     )
 

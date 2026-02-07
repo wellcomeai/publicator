@@ -8,6 +8,7 @@ from database.managers.user_manager import UserManager
 from database.managers.agent_manager import AgentManager
 from bot.states.states import AgentSetup, Onboarding
 from bot.keyboards.keyboards import agent_menu_kb, agent_confirm_delete_kb, main_menu_kb, cancel_kb, preset_choice_kb
+from utils.plan_utils import get_menu_flags
 
 router = Router()
 
@@ -102,10 +103,11 @@ async def agent_instructions_received(message: Message, state: FSMContext):
     
     await state.clear()
     
+    flags = await get_menu_flags(message.from_user.id)
     await message.answer(
         f"✅ Агент <b>{agent['agent_name']}</b> создан!\n\n"
         f"Теперь привяжите канал (📢 Мой канал) и начинайте создавать контент.",
-        reply_markup=main_menu_kb(),
+        reply_markup=main_menu_kb(**flags),
         parse_mode="HTML"
     )
 
@@ -186,7 +188,8 @@ async def agent_confirm_delete(callback: CallbackQuery):
     await callback.answer()
     user = await UserManager.get_by_chat_id(callback.from_user.id)
     await AgentManager.delete_agent(user["id"])
-    await callback.message.answer("✅ Агент удалён.", reply_markup=main_menu_kb())
+    flags = await get_menu_flags(callback.from_user.id)
+    await callback.message.answer("✅ Агент удалён.", reply_markup=main_menu_kb(**flags))
 
 
 @router.callback_query(F.data == "agent:cancel_delete")

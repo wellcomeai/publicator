@@ -42,3 +42,7 @@ class MediaManagement(StatesGroup):
     waiting_ai_video_prompt = State() # Ожидание промта для AI-видео
     waiting_upload = State()          # Ожидание загрузки медиа от пользователя
     waiting_delete_index = State()    # Ожидание номера для удаления
+
+
+class WatcherSetup(StatesGroup):
+    waiting_channel = State()         # Ожидание ввода username канала

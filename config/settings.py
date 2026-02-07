@@ -52,6 +52,7 @@ class Config:
             "allow_schedule": False,
             "allow_analytics": False,
             "watermark": True,
+            "watch_channels": 0,
         },
         "starter": {
             "name": "Стартер",
@@ -62,6 +63,7 @@ class Config:
             "allow_schedule": False,
             "allow_analytics": False,
             "watermark": False,
+            "watch_channels": 1,
         },
         "pro": {
             "name": "Про",
@@ -72,6 +74,7 @@ class Config:
             "allow_schedule": True,
             "allow_analytics": True,
             "watermark": False,
+            "watch_channels": 3,
         },
     }
 

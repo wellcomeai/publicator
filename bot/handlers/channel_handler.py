@@ -9,6 +9,7 @@ from database.managers.channel_manager import ChannelManager
 from bot.states.states import ChannelLink
 from bot.keyboards.keyboards import channel_menu_kb, main_menu_kb, cancel_kb
 from services.channel_service import verify_bot_is_admin
+from utils.plan_utils import get_menu_flags
 
 router = Router()
 
@@ -109,11 +110,12 @@ async def channel_forward_received(message: Message, state: FSMContext, bot: Bot
         pass
 
     ch_display = f"@{channel_username}" if channel_username else channel_title
+    flags = await get_menu_flags(message.from_user.id)
     await message.answer(
         f"✅ Канал <b>{ch_display}</b> привязан!\n\n"
         f"Теперь можете создавать и публиковать контент.",
         parse_mode="HTML",
-        reply_markup=main_menu_kb(),
+        reply_markup=main_menu_kb(**flags),
     )
 
 
@@ -144,4 +146,5 @@ async def channel_unlink(callback: CallbackQuery):
     await callback.answer()
     user = await UserManager.get_by_chat_id(callback.from_user.id)
     await ChannelManager.unlink_channel(user["id"])
-    await callback.message.answer("✅ Канал отвязан.", reply_markup=main_menu_kb())
+    flags = await get_menu_flags(callback.from_user.id)
+    await callback.message.answer("✅ Канал отвязан.", reply_markup=main_menu_kb(**flags))

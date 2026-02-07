@@ -13,6 +13,7 @@ from bot.keyboards.keyboards import (
     preset_choice_kb, onboarding_channel_kb,
     onboarding_first_post_kb, main_menu_kb, cancel_kb
 )
+from utils.plan_utils import get_menu_flags
 from config.presets import AGENT_PRESETS
 from services.channel_service import verify_bot_is_admin
 
@@ -274,4 +275,5 @@ async def onboarding_first_post(callback: CallbackQuery, state: FSMContext):
 async def onboarding_to_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    await callback.message.answer("👇 Главное меню:", reply_markup=main_menu_kb())
+    flags = await get_menu_flags(callback.from_user.id)
+    await callback.message.answer("👇 Главное меню:", reply_markup=main_menu_kb(**flags))

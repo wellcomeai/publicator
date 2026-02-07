@@ -22,6 +22,7 @@ from services.channel_service import publish_post
 from services.url_extractor import extract_text_from_url, detect_url
 from utils.media import extract_media_info, extract_links, get_text
 from utils.html_sanitizer import sanitize_html
+from utils.plan_utils import get_menu_flags
 from config.settings import config
 
 logger = structlog.get_logger()
@@ -887,11 +888,13 @@ async def discard_post(callback: CallbackQuery, state: FSMContext):
     post_id = int(callback.data.split(":")[1])
     await PostManager.discard_draft(post_id)
     await state.clear()
-    await callback.message.answer("🗑 Черновик удалён.", reply_markup=main_menu_kb())
+    flags = await get_menu_flags(callback.from_user.id)
+    await callback.message.answer("🗑 Черновик удалён.", reply_markup=main_menu_kb(**flags))
 
 
 @router.callback_query(F.data == "cancel")
 async def cancel_action(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Отменено")
     await state.clear()
-    await callback.message.answer("Действие отменено.", reply_markup=main_menu_kb())
+    flags = await get_menu_flags(callback.from_user.id)
+    await callback.message.answer("Действие отменено.", reply_markup=main_menu_kb(**flags))
