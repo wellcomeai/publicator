@@ -10,13 +10,16 @@ from aiogram.fsm.context import FSMContext
 
 from database.managers.user_manager import UserManager
 from database.managers.agent_manager import AgentManager
+from database.managers.channel_manager import ChannelManager
 from database.managers.auto_publish_manager import AutoPublishManager
 from database.managers.content_queue_manager import ContentQueueManager
 from database.managers.post_manager import PostManager
+from database.managers.plan_chat_manager import PlanChatManager
 from services.media_manager import PostMediaManager
 from services import openai_service
 from services import image_service
 from services.content_plan_service import generate_content_plan, generate_post_for_topic, generate_cover_for_post
+from services.plan_chat_service import PlanChatService
 from services.whisper_service import transcribe_voice
 from bot.states.states import ContentPlan
 from bot.keyboards.keyboards import (
@@ -28,6 +31,8 @@ from bot.keyboards.keyboards import (
     topic_added_kb,
     confirm_delete_queue_kb,
     plan_ready_notification_kb,
+    plan_chat_cancel_kb,
+    plan_covers_kb,
 )
 from utils.plan_utils import get_auto_publish_limits, get_menu_flags
 from utils.html_sanitizer import sanitize_html
@@ -155,7 +160,8 @@ async def content_plan_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cplan:generate")
 async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
-    """Начало генерации AI-плана"""
+    """Начало генерации AI-плана → открываем диалог с ИИ"""
+    await callback.answer()
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
@@ -166,35 +172,292 @@ async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
     limits = get_auto_publish_limits(plan)
 
     if not limits.get("allow_ai_plan"):
-        await callback.answer(
+        await callback.message.edit_text(
             "⚠️ AI-генерация плана доступна на тарифе Про. Добавляйте темы вручную.",
-            show_alert=True,
         )
         return
 
     # Check prerequisites
     agent = await AgentManager.get_agent(user["id"])
     if not agent:
-        await callback.answer("⚠️ Сначала создайте агента (🤖 Мой агент)", show_alert=True)
+        await callback.message.edit_text("⚠️ Сначала создайте ИИ-агента (🤖 Мой агент).")
+        return
+
+    channel = await ChannelManager.get_channel(user["id"])
+    if not channel:
+        await callback.message.edit_text("⚠️ Сначала привяжите канал (📢 Мой канал).")
         return
 
     settings = await AutoPublishManager.get_settings(user["id"])
     if not settings or not settings.get("schedule", {}).get("slots"):
-        await callback.answer("⚠️ Сначала настройте расписание", show_alert=True)
+        await callback.message.edit_text("⚠️ Сначала настройте расписание публикаций.")
         return
 
     has_tokens = await UserManager.has_tokens(chat_id)
     if not has_tokens:
-        await callback.answer("⚠️ Недостаточно токенов. Докупите в 💳 Подписка.", show_alert=True)
+        await callback.message.edit_text("⚠️ Недостаточно токенов. Докупите в 💳 Подписка.")
         return
 
+    slots = settings["schedule"]["slots"]
+    slots_count = len(slots)
+
+    # Формируем текстовое описание расписания
+    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    schedule_info = ", ".join([
+        f"{day_names[s['day']]} {s['time']}" for s in sorted(slots, key=lambda x: (x["day"], x["time"]))
+    ])
+
+    status_msg = await callback.message.edit_text("⏳ Запускаю планирование...")
+
+    try:
+        first_reply, session_id = await PlanChatService.start_session(
+            chat_id=chat_id,
+            user_id=user["id"],
+            agent_instructions=agent["instructions"],
+            channel_name=channel.get("channel_title", "канал"),
+            slots_count=slots_count,
+            schedule_info=schedule_info
+        )
+
+        # Сохраняем session_id в FSM
+        await state.set_state(ContentPlan.discussing_plan)
+        await state.update_data(plan_session_id=session_id)
+
+        # Отправляем первый ответ ИИ + клавиатуру отмены
+        await status_msg.edit_text(
+            f"🤖 <b>Планирование контента</b>\n\n{first_reply}\n\n"
+            f"<i>Обсудите план с ИИ. Когда будете готовы — подтвердите.</i>",
+            parse_mode="HTML",
+            reply_markup=plan_chat_cancel_kb()
+        )
+    except Exception as e:
+        logger.error("Failed to start plan chat", error=str(e))
+        await status_msg.edit_text(
+            "❌ Ошибка запуска диалога. Попробуйте позже.",
+            reply_markup=content_plan_menu_kb()
+        )
+
+
+# ============================================================
+#  ДИАЛОГ С ИИ ПО КОНТЕНТ-ПЛАНУ
+# ============================================================
+
+@router.message(ContentPlan.discussing_plan)
+async def handle_plan_chat_message(message: Message, state: FSMContext, bot: Bot):
+    """Обработка сообщений пользователя в диалоге по контент-плану"""
+    data = await state.get_data()
+    session_id = data.get("plan_session_id")
+
+    if not session_id:
+        await state.clear()
+        await message.answer("⚠️ Сессия не найдена. Начните заново.")
+        return
+
+    chat_id = message.from_user.id
+
+    # Извлекаем текст (поддержка голосовых через Whisper)
+    user_text = None
+
+    if message.voice or message.audio:
+        status = await message.answer("🎤 Распознаю голос...")
+        try:
+            voice_obj = message.voice or message.audio
+            user_text = await transcribe_voice(bot, voice_obj)
+            await status.delete()
+        except Exception as e:
+            logger.error("Whisper transcription failed in plan chat", error=str(e))
+            await status.edit_text("❌ Не удалось распознать голос. Напишите текстом.")
+            return
+        if not user_text:
+            await message.answer("❌ Не удалось распознать голос. Напишите текстом.")
+            return
+    elif message.text:
+        user_text = message.text
+    else:
+        await message.answer("⚠️ Отправьте текст или голосовое сообщение.")
+        return
+
+    if not user_text or not user_text.strip():
+        await message.answer("⚠️ Пустое сообщение.")
+        return
+
+    # Показываем "думаю..."
+    status_msg = await message.answer("💭 Думаю...")
+
+    try:
+        reply_text, confirmed_plan = await PlanChatService.send_message(
+            session_id=session_id,
+            user_message=user_text.strip(),
+            chat_id=chat_id
+        )
+
+        if confirmed_plan:
+            # === ПЛАН ПОДТВЕРЖДЁН ===
+            # Сохраняем план в FSM для следующего шага (вопрос про обложки)
+            await state.clear()
+            await state.update_data(confirmed_plan=confirmed_plan)
+
+            await status_msg.edit_text(
+                f"✅ <b>План подтверждён!</b>\n\n{reply_text}",
+                parse_mode="HTML"
+            )
+
+            # Переходим к вопросу про обложки
+            await message.answer(
+                "🖼 Генерировать AI-обложки к постам?\n"
+                "(это займёт больше времени и токенов)",
+                reply_markup=plan_covers_kb()
+            )
+        else:
+            # === ОБЫЧНЫЙ ОТВЕТ — продолжаем диалог ===
+            await status_msg.edit_text(
+                reply_text,
+                reply_markup=plan_chat_cancel_kb()
+            )
+    except Exception as e:
+        logger.error("Plan chat message error", error=str(e), session_id=session_id)
+        await status_msg.edit_text("❌ Ошибка. Попробуйте отправить сообщение ещё раз.")
+
+
+@router.callback_query(F.data == "plan_chat_cancel")
+async def cb_plan_chat_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отмена диалога по контент-плану"""
+    await callback.answer("Планирование отменено")
+
+    data = await state.get_data()
+    session_id = data.get("plan_session_id")
+
+    if session_id:
+        await PlanChatManager.cancel_session(session_id)
+
+    await state.clear()
+
     await callback.message.edit_text(
-        "🖼 Генерировать AI-обложки к постам?\n"
-        "(это займёт больше времени и токенов)",
-        reply_markup=generate_plan_covers_kb(),
+        "❌ Планирование контента отменено.\n"
+        "Вы можете начать заново в разделе контент-плана.",
+        reply_markup=content_plan_menu_kb()
     )
+
+
+@router.callback_query(F.data.in_({"plan_covers_yes", "plan_covers_no"}))
+async def cb_plan_covers_choice(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Выбор: генерировать обложки или нет — после подтверждения плана через диалог"""
     await callback.answer()
 
+    with_covers = callback.data == "plan_covers_yes"
+    data = await state.get_data()
+    confirmed_plan = data.get("confirmed_plan")
+
+    if not confirmed_plan:
+        await callback.message.edit_text(
+            "⚠️ План не найден. Начните заново.",
+            reply_markup=content_plan_menu_kb()
+        )
+        await state.clear()
+        return
+
+    await state.clear()
+
+    topics = confirmed_plan.get("topics", [])
+    chat_id = callback.from_user.id
+    user = await UserManager.get_by_chat_id(chat_id)
+    if not user:
+        await callback.message.edit_text("⚠️ Пользователь не найден.")
+        return
+
+    user_id = user["id"]
+    agent = await AgentManager.get_agent(user_id)
+    if not agent:
+        await callback.message.edit_text("⚠️ Агент не найден.")
+        return
+
+    settings = await AutoPublishManager.get_settings(user_id)
+    schedule = settings.get("schedule", {}) if settings else {}
+
+    await callback.message.edit_text(
+        f"⏳ Генерирую {len(topics)} постов"
+        f"{' с обложками' if with_covers else ''}...\n"
+        f"Это может занять несколько минут."
+    )
+
+    # Рассчитываем даты для постов
+    from services.content_plan_service import calculate_schedule_times
+    schedule_times = calculate_schedule_times(schedule, len(topics)) if schedule.get("slots") else []
+
+    agent_model = agent.get("model", "gpt-4o-mini")
+    queue_items = []
+    errors = 0
+
+    for i, topic_data in enumerate(topics):
+        topic = topic_data["topic"]
+        fmt = topic_data.get("format", "обзор")
+
+        # Генерация текста поста
+        result = await generate_post_for_topic(
+            topic=topic,
+            format=fmt,
+            agent_instructions=agent["instructions"],
+            model=agent_model,
+        )
+
+        if not result.get("success"):
+            logger.error("Post generation failed for plan topic", topic=topic[:50])
+            errors += 1
+            continue
+
+        post_tokens = result.get("total_tokens", 0)
+        await UserManager.spend_tokens(chat_id, post_tokens)
+
+        # Создаём запись поста
+        post = await PostManager.create_post(
+            user_id=user_id,
+            generated_text=result["text"],
+            original_text=topic,
+            input_tokens=result.get("input_tokens", 0),
+            output_tokens=result.get("output_tokens", 0),
+        )
+        post_id = post["id"]
+
+        # Генерация обложки
+        if with_covers:
+            cover = await generate_cover_for_post(result["text"], bot, chat_id)
+            if cover:
+                await PostMediaManager.add_media_item(post_id, cover)
+
+        scheduled_at = schedule_times[i] if i < len(schedule_times) else None
+
+        queue_items.append({
+            "topic": topic,
+            "format": fmt,
+            "post_id": post_id,
+            "scheduled_at": scheduled_at,
+            "status": "ready",
+        })
+
+    # Сохраняем в очередь
+    if queue_items:
+        await ContentQueueManager.add_items_batch(user_id, queue_items)
+
+    success_count = len(queue_items)
+
+    if success_count > 0:
+        error_note = f"\n⚠️ {errors} постов не удалось создать." if errors > 0 else ""
+        await callback.message.edit_text(
+            f"🎉 Контент-план выполнен!\n"
+            f"Сгенерировано {success_count} постов.{error_note}\n"
+            f"Они будут опубликованы по расписанию.",
+            reply_markup=plan_ready_notification_kb()
+        )
+    else:
+        await callback.message.edit_text(
+            "❌ Не удалось создать посты. Попробуйте позже.",
+            reply_markup=content_plan_menu_kb()
+        )
+
+
+# ============================================================
+#  AI-ГЕНЕРАЦИЯ ПЛАНА (старый флоу без диалога)
+# ============================================================
 
 @router.callback_query(F.data.startswith("cplan_gen:"))
 async def generate_plan_execute(callback: CallbackQuery, state: FSMContext, bot: Bot):

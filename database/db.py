@@ -204,6 +204,17 @@ async def _create_tables():
         ALTER TABLE auto_publish_settings ADD COLUMN IF NOT EXISTS is_generating BOOLEAN DEFAULT FALSE;
         ALTER TABLE auto_publish_settings ADD COLUMN IF NOT EXISTS last_processed_at TIMESTAMPTZ;
 
+        -- Чат-сессии контент-плана (диалог с ИИ)
+        CREATE TABLE IF NOT EXISTS plan_chat_sessions (
+            id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            messages JSONB DEFAULT '[]'::jsonb,
+            status VARCHAR(20) DEFAULT 'active',
+            confirmed_plan JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '24 hours')
+        );
+
         -- Индексы
         CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users(chat_id);
         CREATE INDEX IF NOT EXISTS idx_channels_user_id ON channels(user_id);
@@ -218,6 +229,7 @@ async def _create_tables():
         CREATE INDEX IF NOT EXISTS idx_auto_publish_user_id ON auto_publish_settings(user_id);
         CREATE INDEX IF NOT EXISTS idx_content_queue_user_id ON content_queue(user_id);
         CREATE INDEX IF NOT EXISTS idx_content_queue_status ON content_queue(status);
+        CREATE INDEX IF NOT EXISTS idx_plan_chat_user_status ON plan_chat_sessions(user_id, status);
 
         """)
         logger.info("✅ Database tables created/verified")

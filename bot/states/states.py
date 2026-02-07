@@ -52,6 +52,7 @@ class AutoPublishSetup(StatesGroup):
 
 class ContentPlan(StatesGroup):
     """Управление контент-планом"""
+    discussing_plan = State()         # Диалог с ИИ по контент-плану
     browsing_queue = State()          # Просмотр карусели
     editing_post_text = State()       # Редактирование текста поста в очереди
     changing_topic = State()          # Ввод новой темы

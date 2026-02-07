@@ -107,5 +107,38 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 Build: `pip install -r requirements.txt`
 Start: `uvicorn app:app --host 0.0.0.0 --port $PORT`
 
+## Диалог контент-плана (Plan Chat)
+
+### Архитектура
+Перед генерацией постов автопубликации — интерактивный диалог пользователя с ИИ для согласования контент-плана. Используется OpenAI Function Calling.
+
+### Ключевые файлы
+- `database/managers/plan_chat_manager.py` — CRUD для таблицы `plan_chat_sessions`
+- `services/plan_chat_service.py` — оркестрация диалога (OpenAI <-> DB <-> Handler)
+- `bot/handlers/content_plan_handler.py` — FSM хэндлеры диалога
+
+### Таблица БД
+- `plan_chat_sessions` — хранит историю диалога (JSONB messages), статус, подтверждённый план
+
+### FSM State
+- `ContentPlan.discussing_plan` — активен пока идёт диалог с ИИ
+
+### Флоу
+1. Кнопка "Сгенерировать план" (`cplan:generate`) -> `PlanChatService.start_session()` -> FSM state
+2. Каждое сообщение -> `PlanChatService.send_message()` -> OpenAI с tools
+3. Перехват `tool_calls` -> если `confirm_content_plan` -> парсим topics -> вопрос про обложки -> генерация
+4. Кнопка "Отменить" -> `PlanChatManager.cancel_session()` -> FSM clear
+
+### OpenAI Function
+- Tool: `confirm_content_plan` (topic, format, description для каждой темы)
+- Системный промт содержит жёсткую инструкцию: вызывать ТОЛЬКО после явного подтверждения
+- Перехват: проверяем `response.choices[0].message.tool_calls` на нашей стороне
+
+### Голосовые
+- Поддержка голосовых сообщений в диалоге через Whisper (как в остальном боте)
+
+### Токены
+- Списываются за каждый запрос к OpenAI в рамках диалога через `UserManager.spend_tokens()`
+
 ## Тестирование
 Тестов пока нет. При добавлении использовать pytest + pytest-asyncio.

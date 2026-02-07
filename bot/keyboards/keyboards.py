@@ -446,6 +446,23 @@ def topic_added_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def plan_chat_cancel_kb() -> InlineKeyboardMarkup:
+    """Клавиатура отмены диалога планирования"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отменить планирование", callback_data="plan_chat_cancel")]
+    ])
+
+
+def plan_covers_kb() -> InlineKeyboardMarkup:
+    """Выбор генерации обложек после подтверждения плана"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, с обложками", callback_data="plan_covers_yes"),
+            InlineKeyboardButton(text="❌ Без обложек", callback_data="plan_covers_no"),
+        ]
+    ])
+
+
 def confirm_delete_queue_kb(queue_id: int) -> InlineKeyboardMarkup:
     """Подтверждение удаления поста из очереди"""
     return InlineKeyboardMarkup(inline_keyboard=[
