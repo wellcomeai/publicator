@@ -35,7 +35,8 @@ class PlanChatService:
         agent_instructions: str,
         channel_name: str,
         slots_count: int,
-        schedule_info: str
+        schedule_info: str,
+        current_date: str = ""
     ) -> Tuple[str, int]:
         """
         Начать новую сессию диалога.
@@ -52,7 +53,8 @@ class PlanChatService:
             agent_instructions=agent_instructions,
             channel_name=channel_name,
             slots_count=slots_count,
-            schedule_info=schedule_info
+            schedule_info=schedule_info,
+            current_date=current_date
         )
 
         # Сохраняем system message

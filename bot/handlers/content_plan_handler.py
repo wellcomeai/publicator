@@ -215,6 +215,9 @@ async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
         f"{day_names[s['day']]} {s['time']}" for s in sorted(slots, key=lambda x: (x["day"], x["time"]))
     ])
 
+    now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
+    current_date = now_msk.strftime("%d.%m.%Y (%A)")
+
     status_msg = await callback.message.edit_text("⏳ Запускаю планирование...")
 
     try:
@@ -224,7 +227,8 @@ async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
             agent_instructions=agent["instructions"],
             channel_name=channel.get("channel_title", "канал"),
             slots_count=slots_count,
-            schedule_info=schedule_info
+            schedule_info=schedule_info,
+            current_date=current_date
         )
 
         # Сохраняем session_id в FSM
