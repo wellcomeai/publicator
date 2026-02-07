@@ -46,6 +46,14 @@ router = Router()
 #  УТИЛИТЫ
 # ============================================================
 
+async def _safe_callback_answer(callback: CallbackQuery, text: str = None, show_alert: bool = False):
+    """Безопасный ответ на callback query (не падает на протухших запросах)"""
+    try:
+        await callback.answer(text, show_alert=show_alert)
+    except Exception:
+        pass
+
+
 def _parse_media_info(media_info):
     """Parse media_info to dict"""
     if isinstance(media_info, str):
@@ -120,7 +128,7 @@ async def content_plan_menu(callback: CallbackQuery, state: FSMContext):
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
-        await callback.answer("Ошибка", show_alert=True)
+        await _safe_callback_answer(callback, "Ошибка", show_alert=True)
         return
 
     user_id = user["id"]
@@ -151,7 +159,7 @@ async def content_plan_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=content_plan_menu_kb(),
         parse_mode="HTML",
     )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 # ============================================================
@@ -161,11 +169,11 @@ async def content_plan_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "cplan:generate")
 async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
     """Начало генерации AI-плана → открываем диалог с ИИ"""
-    await callback.answer()
+    await _safe_callback_answer(callback)
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
-        await callback.answer("Ошибка", show_alert=True)
+        await _safe_callback_answer(callback, "Ошибка", show_alert=True)
         return
 
     plan = user.get("plan", "free")
@@ -322,7 +330,7 @@ async def handle_plan_chat_message(message: Message, state: FSMContext, bot: Bot
 @router.callback_query(F.data == "plan_chat_cancel")
 async def cb_plan_chat_cancel(callback: CallbackQuery, state: FSMContext):
     """Отмена диалога по контент-плану"""
-    await callback.answer("Планирование отменено")
+    await _safe_callback_answer(callback, "Планирование отменено")
 
     data = await state.get_data()
     session_id = data.get("plan_session_id")
@@ -342,7 +350,7 @@ async def cb_plan_chat_cancel(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.in_({"plan_covers_yes", "plan_covers_no"}))
 async def cb_plan_covers_choice(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Выбор: генерировать обложки или нет — после подтверждения плана через диалог"""
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
     with_covers = callback.data == "plan_covers_yes"
     data = await state.get_data()
@@ -462,7 +470,7 @@ async def cb_plan_covers_choice(callback: CallbackQuery, state: FSMContext, bot:
 @router.callback_query(F.data.startswith("cplan_gen:"))
 async def generate_plan_execute(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Запуск генерации плана"""
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
     with_covers = callback.data == "cplan_gen:with_covers"
     chat_id = callback.from_user.id
@@ -557,7 +565,7 @@ async def add_topic_start(callback: CallbackQuery, state: FSMContext):
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
-        await callback.answer("Ошибка", show_alert=True)
+        await _safe_callback_answer(callback, "Ошибка", show_alert=True)
         return
 
     plan = user.get("plan", "free")
@@ -567,7 +575,8 @@ async def add_topic_start(callback: CallbackQuery, state: FSMContext):
     current_count = await ContentQueueManager.get_active_queue_count(user["id"])
     max_size = limits.get("max_queue_size", 10)
     if current_count >= max_size:
-        await callback.answer(
+        await _safe_callback_answer(
+            callback,
             f"⚠️ Максимум {max_size} постов в очереди. Удалите старые или обновите тариф.",
             show_alert=True,
         )
@@ -576,12 +585,12 @@ async def add_topic_start(callback: CallbackQuery, state: FSMContext):
     # Check prerequisites
     agent = await AgentManager.get_agent(user["id"])
     if not agent:
-        await callback.answer("⚠️ Сначала создайте агента (🤖 Мой агент)", show_alert=True)
+        await _safe_callback_answer(callback, "⚠️ Сначала создайте агента (🤖 Мой агент)", show_alert=True)
         return
 
     has_tokens = await UserManager.has_tokens(chat_id)
     if not has_tokens:
-        await callback.answer("⚠️ Недостаточно токенов", show_alert=True)
+        await _safe_callback_answer(callback, "⚠️ Недостаточно токенов", show_alert=True)
         return
 
     await state.set_state(ContentPlan.adding_topic)
@@ -603,7 +612,7 @@ async def add_topic_start(callback: CallbackQuery, state: FSMContext):
             "• Как выбрать CRM для малого бизнеса\n"
             "• Кейс: автоматизация ресторана"
         )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(ContentPlan.adding_topic)
@@ -733,18 +742,18 @@ async def browse_queue(callback: CallbackQuery, state: FSMContext, bot: Bot):
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
-        await callback.answer("Ошибка", show_alert=True)
+        await _safe_callback_answer(callback, "Ошибка", show_alert=True)
         return
 
     user_id = user["id"]
     count = await ContentQueueManager.get_active_queue_count(user_id)
     if count == 0:
-        await callback.answer("Очередь пуста. Сгенерируйте контент-план.", show_alert=True)
+        await _safe_callback_answer(callback, "Очередь пуста. Сгенерируйте контент-план.", show_alert=True)
         return
 
     await state.set_state(ContentPlan.browsing_queue)
     await _show_carousel_item(chat_id, state, 1, user_id, bot)
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 async def _show_carousel_item(chat_id: int, state: FSMContext, position: int, user_id: int, bot: Bot):
@@ -874,7 +883,7 @@ async def carousel_navigate(callback: CallbackQuery, state: FSMContext, bot: Bot
     chat_id = callback.from_user.id
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
-        await callback.answer("Ошибка", show_alert=True)
+        await _safe_callback_answer(callback, "Ошибка", show_alert=True)
         return
 
     user_id = user["id"]
@@ -904,7 +913,7 @@ async def carousel_navigate(callback: CallbackQuery, state: FSMContext, bot: Bot
 
     await state.set_state(ContentPlan.browsing_queue)
     await _show_carousel_item(chat_id, state, new_pos, user_id, bot)
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 # ============================================================
@@ -925,7 +934,7 @@ async def edit_post_menu(callback: CallbackQuery, state: FSMContext):
             "✏️ Как изменить пост?",
             reply_markup=carousel_edit_text_kb(queue_id),
         )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("cplan_textedit:custom:"))
@@ -945,7 +954,7 @@ async def edit_custom(callback: CallbackQuery, state: FSMContext):
             "✏️ Напишите что изменить.\n"
             "Например: «Сделай короче», «Добавь цифры», «Измени тон на более дружеский»"
         )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(ContentPlan.editing_post_text)
@@ -1029,7 +1038,7 @@ async def process_edit_text(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data.startswith("cplan_textedit:regen:"))
 async def regen_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Перегенерировать пост"""
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
     queue_id = int(callback.data.split(":")[2])
     chat_id = callback.from_user.id
@@ -1058,7 +1067,6 @@ async def regen_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     if not result.get("success"):
         await callback.message.edit_text("❌ Ошибка. Попробуйте позже.")
-        await callback.answer()
         return
 
     tokens = result.get("total_tokens", 0)
@@ -1096,7 +1104,7 @@ async def change_topic(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("📋 Введите новую тему:")
     except Exception:
         await callback.message.answer("📋 Введите новую тему:")
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(ContentPlan.changing_topic)
@@ -1185,7 +1193,7 @@ async def cover_menu(callback: CallbackQuery, state: FSMContext):
 
     item = await ContentQueueManager.get_item(queue_id)
     if not item or not item.get("post_id"):
-        await callback.answer("Пост не найден", show_alert=True)
+        await _safe_callback_answer(callback, "Пост не найден", show_alert=True)
         return
 
     post = await PostManager.get_post(item["post_id"])
@@ -1203,13 +1211,13 @@ async def cover_menu(callback: CallbackQuery, state: FSMContext):
             f"🖼 Обложка поста\n\nТекущая: {cover_status}",
             reply_markup=carousel_cover_kb(queue_id, has_cover),
         )
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("cplan_cover_auto:"))
 async def cover_auto_generate(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Авто-генерация обложки"""
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
     queue_id = int(callback.data.split(":")[1])
     chat_id = callback.from_user.id
@@ -1257,7 +1265,7 @@ async def cover_custom_prompt(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("🎨 Опишите картинку:")
     except Exception:
         await callback.message.answer("🎨 Опишите картинку:")
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(ContentPlan.waiting_cover_prompt)
@@ -1324,7 +1332,7 @@ async def cover_upload_start(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("📎 Отправьте фото:")
     except Exception:
         await callback.message.answer("📎 Отправьте фото:")
-    await callback.answer()
+    await _safe_callback_answer(callback)
 
 
 @router.message(ContentPlan.waiting_cover_upload, F.photo)
@@ -1377,7 +1385,7 @@ async def cover_remove(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     item = await ContentQueueManager.get_item(queue_id)
     if not item or not item.get("post_id"):
-        await callback.answer("Пост не найден", show_alert=True)
+        await _safe_callback_answer(callback, "Пост не найден", show_alert=True)
         return
 
     await PostMediaManager.clear_media(item["post_id"])
@@ -1394,7 +1402,7 @@ async def cover_remove(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     await state.set_state(ContentPlan.browsing_queue)
     await _show_carousel_item(chat_id, state, pos, user_id, bot)
-    await callback.answer("Обложка удалена")
+    await _safe_callback_answer(callback, "Обложка удалена")
 
 
 # ============================================================
@@ -1412,7 +1420,7 @@ async def delete_from_queue(callback: CallbackQuery, state: FSMContext):
         )
     except Exception:
         pass
-    await callback.answer("Подтвердите удаление")
+    await _safe_callback_answer(callback, "Подтвердите удаление")
 
 
 @router.callback_query(F.data.startswith("cplan_confirm_del:"))
@@ -1423,7 +1431,7 @@ async def confirm_delete(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     item = await ContentQueueManager.get_item(queue_id)
     if not item:
-        await callback.answer("Не найдено", show_alert=True)
+        await _safe_callback_answer(callback, "Не найдено", show_alert=True)
         return
 
     user_id = item["user_id"]
@@ -1446,7 +1454,7 @@ async def confirm_delete(callback: CallbackQuery, state: FSMContext, bot: Bot):
             )
         except Exception:
             pass
-        await callback.answer("Удалено")
+        await _safe_callback_answer(callback, "Удалено")
         return
 
     data = await state.get_data()
@@ -1455,7 +1463,7 @@ async def confirm_delete(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     await state.set_state(ContentPlan.browsing_queue)
     await _show_carousel_item(chat_id, state, pos, user_id, bot)
-    await callback.answer("Удалено")
+    await _safe_callback_answer(callback, "Удалено")
 
 
 # ============================================================
@@ -1469,7 +1477,7 @@ async def insert_topic(callback: CallbackQuery, state: FSMContext):
 
     item = await ContentQueueManager.get_item(queue_id)
     if not item:
-        await callback.answer("Не найдено", show_alert=True)
+        await _safe_callback_answer(callback, "Не найдено", show_alert=True)
         return
 
     await state.set_state(ContentPlan.adding_topic)
@@ -1483,4 +1491,4 @@ async def insert_topic(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             f"📝 Введите тему нового поста (вставится после #{item['position']}):"
         )
-    await callback.answer()
+    await _safe_callback_answer(callback)
