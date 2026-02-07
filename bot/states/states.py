@@ -42,3 +42,19 @@ class MediaManagement(StatesGroup):
     waiting_ai_video_prompt = State() # Ожидание промта для AI-видео
     waiting_upload = State()          # Ожидание загрузки медиа от пользователя
     waiting_delete_index = State()    # Ожидание номера для удаления
+
+
+class AutoPublishSetup(StatesGroup):
+    """Настройка расписания авто-публикации"""
+    choosing_days = State()           # Выбор дней недели
+    entering_times = State()          # Ввод времени
+
+
+class ContentPlan(StatesGroup):
+    """Управление контент-планом"""
+    browsing_queue = State()          # Просмотр карусели
+    editing_post_text = State()       # Редактирование текста поста в очереди
+    changing_topic = State()          # Ввод новой темы
+    adding_topic = State()            # Ручное добавление темы
+    waiting_cover_prompt = State()    # Ожидание промта для обложки
+    waiting_cover_upload = State()    # Ожидание загрузки своего фото

@@ -8,15 +8,17 @@ from aiogram.types import (
 
 # ===== ГЛАВНОЕ МЕНЮ =====
 
-def main_menu_kb(show_schedule: bool = False) -> ReplyKeyboardMarkup:
-    """Главное меню. show_schedule для Про."""
+def main_menu_kb(show_schedule: bool = False, show_auto_publish: bool = False) -> ReplyKeyboardMarkup:
+    """Главное меню. show_schedule для Про, show_auto_publish для starter+."""
     keyboard = [
         [KeyboardButton(text="✍️ Создать пост"), KeyboardButton(text="🔄 Рерайт поста")],
         [KeyboardButton(text="🤖 Мой агент"), KeyboardButton(text="📢 Мой канал")],
     ]
 
     row3 = []
-    if show_schedule:
+    if show_auto_publish:
+        row3.append(KeyboardButton(text="📅 Авто-публикация"))
+    elif show_schedule:
         row3.append(KeyboardButton(text="📅 Расписание"))
     row3.append(KeyboardButton(text="👤 Профиль"))
     keyboard.append(row3)
@@ -240,4 +242,149 @@ def scheduled_list_kb(scheduled_items: list) -> InlineKeyboardMarkup:
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+    ])
+
+
+# ===== АВТО-ПУБЛИКАЦИЯ =====
+
+def auto_publish_menu_kb(is_active: bool, has_schedule: bool, queue_count: int) -> InlineKeyboardMarkup:
+    """Главное меню авто-публикации"""
+    buttons = [
+        [InlineKeyboardButton(text="⏰ Расписание", callback_data="autopub:schedule")],
+        [InlineKeyboardButton(text="📋 Контент-план", callback_data="autopub:plan")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="autopub:settings")],
+    ]
+    if is_active:
+        buttons.append([InlineKeyboardButton(text="⏸ Пауза", callback_data="autopub:toggle")])
+    else:
+        buttons.append([InlineKeyboardButton(text="▶️ Включить", callback_data="autopub:toggle")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def schedule_days_kb(selected_days: list) -> InlineKeyboardMarkup:
+    """Выбор дней недели с toggle"""
+    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    row1 = []
+    row2 = []
+    for i, name in enumerate(day_names):
+        check = "☑️" if i in selected_days else "☐"
+        btn = InlineKeyboardButton(text=f"{check} {name}", callback_data=f"autopub_day:{i}")
+        if i < 4:
+            row1.append(btn)
+        else:
+            row2.append(btn)
+    buttons = [row1, row2]
+    buttons.append([
+        InlineKeyboardButton(text="✅ Далее", callback_data="autopub_days_done"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="autopub:menu"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def auto_publish_settings_kb(moderation: str, covers: bool, on_empty: str) -> InlineKeyboardMarkup:
+    """Настройки авто-публикации с toggle кнопками"""
+    mod_text = "👀 Модерация: На проверку" if moderation == "review" else "📢 Модерация: Автоматически"
+    covers_text = "🖼 Обложки: ВКЛ" if covers else "🖼 Обложки: ВЫКЛ"
+    empty_text = "⏸ Если пусто: Пауза" if on_empty == "pause" else "🤖 Если пусто: Авто-генерация"
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=mod_text, callback_data="autopub_set:moderation")],
+        [InlineKeyboardButton(text=covers_text, callback_data="autopub_set:covers")],
+        [InlineKeyboardButton(text=empty_text, callback_data="autopub_set:on_empty")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")],
+    ])
+
+
+def content_plan_menu_kb() -> InlineKeyboardMarkup:
+    """Меню контент-плана"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Сгенерировать план", callback_data="cplan:generate")],
+        [InlineKeyboardButton(text="📝 Добавить тему", callback_data="cplan:add_topic")],
+        [InlineKeyboardButton(text="📄 Просмотр очереди", callback_data="cplan:browse")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")],
+    ])
+
+
+def generate_plan_covers_kb() -> InlineKeyboardMarkup:
+    """Спрос обложек перед генерацией"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, с обложками", callback_data="cplan_gen:with_covers")],
+        [InlineKeyboardButton(text="❌ Только текст", callback_data="cplan_gen:no_covers")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:plan")],
+    ])
+
+
+def carousel_kb(queue_id: int, position: int, total: int) -> InlineKeyboardMarkup:
+    """Кнопки карусели под превью поста"""
+    nav_row = []
+    if position > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"cplan_nav:prev:{position}"))
+    nav_row.append(InlineKeyboardButton(text=f"{position}/{total}", callback_data="noop"))
+    if position < total:
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"cplan_nav:next:{position}"))
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        nav_row,
+        [
+            InlineKeyboardButton(text="✏️ Текст", callback_data=f"cplan_edit:{queue_id}"),
+            InlineKeyboardButton(text="🖼 Обложка", callback_data=f"cplan_cover:{queue_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"cplan_delete:{queue_id}"),
+            InlineKeyboardButton(text="➕ Вставить", callback_data=f"cplan_insert:{queue_id}"),
+        ],
+    ])
+
+
+def carousel_edit_text_kb(queue_id: int) -> InlineKeyboardMarkup:
+    """Варианты редактирования текста"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Свои правки", callback_data=f"cplan_textedit:custom:{queue_id}")],
+        [InlineKeyboardButton(text="🔄 Перегенерировать", callback_data=f"cplan_textedit:regen:{queue_id}")],
+        [InlineKeyboardButton(text="📋 Сменить тему", callback_data=f"cplan_textedit:newtopic:{queue_id}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cplan_nav:stay:{queue_id}")],
+    ])
+
+
+def carousel_cover_kb(queue_id: int, has_cover: bool) -> InlineKeyboardMarkup:
+    """Управление обложкой"""
+    buttons = [
+        [InlineKeyboardButton(text="🔄 Сгенерировать (авто)", callback_data=f"cplan_cover_auto:{queue_id}")],
+        [InlineKeyboardButton(text="✏️ Свой промт", callback_data=f"cplan_cover_prompt:{queue_id}")],
+        [InlineKeyboardButton(text="📎 Загрузить фото", callback_data=f"cplan_cover_upload:{queue_id}")],
+    ]
+    if has_cover:
+        buttons.append([InlineKeyboardButton(text="🗑 Убрать обложку", callback_data=f"cplan_cover_remove:{queue_id}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cplan_nav:stay:{queue_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def review_post_kb(queue_id: int) -> InlineKeyboardMarkup:
+    """Кнопки модерации поста"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Опубликовать", callback_data=f"review_publish:{queue_id}")],
+        [
+            InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"review_edit:{queue_id}"),
+            InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"review_skip:{queue_id}"),
+        ],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"review_delete:{queue_id}")],
+    ])
+
+
+def topic_added_kb() -> InlineKeyboardMarkup:
+    """Кнопки после добавления темы"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Ещё тему", callback_data="cplan:add_topic")],
+        [InlineKeyboardButton(text="📄 Смотреть очередь", callback_data="cplan:browse")],
+        [InlineKeyboardButton(text="✅ Готово", callback_data="autopub:menu")],
+    ])
+
+
+def confirm_delete_queue_kb(queue_id: int) -> InlineKeyboardMarkup:
+    """Подтверждение удаления поста из очереди"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да", callback_data=f"cplan_confirm_del:{queue_id}"),
+            InlineKeyboardButton(text="❌ Нет", callback_data=f"cplan_nav:stay:{queue_id}"),
+        ],
     ])
