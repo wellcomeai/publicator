@@ -27,6 +27,7 @@ from bot.keyboards.keyboards import (
     carousel_cover_kb,
     topic_added_kb,
     confirm_delete_queue_kb,
+    plan_ready_notification_kb,
 )
 from utils.plan_utils import get_auto_publish_limits, get_menu_flags
 from utils.html_sanitizer import sanitize_html
@@ -223,6 +224,9 @@ async def generate_plan_execute(callback: CallbackQuery, state: FSMContext, bot:
         f"🖼 Обложки: {'⏳' if with_covers else 'выкл'}"
     )
 
+    # Устанавливаем state для отслеживания в генераторе
+    await state.set_state(ContentPlan.browsing_queue)
+
     try:
         items = await generate_content_plan(
             bot=bot,
@@ -233,23 +237,44 @@ async def generate_plan_execute(callback: CallbackQuery, state: FSMContext, bot:
             schedule=schedule,
             generate_covers=with_covers,
             status_message=status_msg,
+            state=state,
         )
 
         if items:
-            await status_msg.edit_text(
-                f"✅ Контент-план создан! {len(items)} постов добавлено.\n\n"
-                f"Смотрите очередь в 📄 Просмотр очереди."
-            )
+            # Проверяем: пользователь ещё в меню?
+            current_state = await state.get_state()
+            user_in_menu = current_state and "ContentPlan" in str(current_state)
 
-            # Show first item in carousel
-            await _show_carousel_item(chat_id, state, 1, user_id, bot)
+            if user_in_menu:
+                # Показать карусель
+                try:
+                    await status_msg.edit_text(
+                        f"✅ Контент-план создан! {len(items)} постов добавлено."
+                    )
+                except Exception:
+                    pass
+                await _show_carousel_item(chat_id, state, 1, user_id, bot)
+            else:
+                # Пользователь ушёл — одно уведомление с кнопкой
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+                try:
+                    await bot.send_message(
+                        chat_id,
+                        f"✅ Контент-план готов! {len(items)} постов создано.",
+                        reply_markup=plan_ready_notification_kb(),
+                    )
+                except Exception:
+                    pass
         else:
             await status_msg.edit_text(
                 "❌ Не удалось создать контент-план. Попробуйте позже.",
                 reply_markup=content_plan_menu_kb(),
             )
     except Exception as e:
-        logger.error("❌ Plan generation error", error=str(e))
+        logger.error("Plan generation error", error=str(e))
         try:
             await status_msg.edit_text(
                 "❌ Ошибка при генерации плана. Попробуйте позже.",

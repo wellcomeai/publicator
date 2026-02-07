@@ -417,6 +417,14 @@ def carousel_cover_kb(queue_id: int, has_cover: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def plan_ready_notification_kb() -> InlineKeyboardMarkup:
+    """Уведомление о готовности контент-плана"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Смотреть посты", callback_data="cplan:browse")],
+        [InlineKeyboardButton(text="▶️ Включить авто-публикацию", callback_data="autopub:toggle")],
+    ])
+
+
 def review_post_kb(queue_id: int) -> InlineKeyboardMarkup:
     """Кнопки модерации поста"""
     return InlineKeyboardMarkup(inline_keyboard=[

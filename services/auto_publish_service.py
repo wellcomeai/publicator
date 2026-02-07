@@ -4,6 +4,7 @@ import json
 import asyncio
 import structlog
 from datetime import datetime, timezone, timedelta
+from typing import Set
 from zoneinfo import ZoneInfo
 from aiogram import Bot
 
@@ -23,18 +24,23 @@ logger = structlog.get_logger()
 
 CHECK_INTERVAL = 60  # секунд
 REVIEW_REMINDER_INTERVAL = 30 * 60  # 30 минут
+MAX_REVIEW_REMINDERS = 3
+MIN_PROCESS_INTERVAL = 5 * 60  # 5 минут между обработками одного пользователя
+
+# In-memory защита от параллельной обработки одного пользователя
+_processing_users: Set[int] = set()
 
 
 async def run_auto_publisher(bot: Bot):
     """Бесконечный цикл авто-публикации"""
-    logger.info("📅 Auto-publisher started")
+    logger.info("Auto-publisher started")
 
     while True:
         try:
             await _process_auto_publish(bot)
             await _send_review_reminders(bot)
         except Exception as e:
-            logger.error("❌ Auto-publisher error", error=str(e))
+            logger.error("Auto-publisher error", error=str(e))
 
         await asyncio.sleep(CHECK_INTERVAL)
 
@@ -70,7 +76,7 @@ async def _process_auto_publish(bot: Bot):
         try:
             await _process_user_auto_publish(bot, settings)
         except Exception as e:
-            logger.error("❌ Auto-publish error for user",
+            logger.error("Auto-publish error for user",
                          user_id=settings.get("user_id"), error=str(e))
 
 
@@ -82,39 +88,87 @@ async def _process_user_auto_publish(bot: Bot, settings: dict):
     moderation = settings.get("moderation", "review")
     on_empty = settings.get("on_empty", "pause")
 
-    # Проверяем наступил ли слот
-    next_ready = await ContentQueueManager.get_next_ready(user_id)
-    if not next_ready:
-        # Очередь пуста
-        # Проверяем есть ли посты в review
+    # 1. Защита от одновременной обработки
+    if user_id in _processing_users:
+        logger.debug("Scheduler tick: user already processing", user_id=user_id)
+        return
+    _processing_users.add(user_id)
+
+    try:
+        # 2. Проверяем что сейчас время слота
+        is_slot = _is_slot_now(schedule)
+        if not is_slot:
+            logger.debug("Scheduler tick: not slot time", user_id=user_id)
+            return
+
+        # 3. Проверяем last_processed_at (не чаще раз в 5 минут)
+        last_processed = settings.get("last_processed_at")
+        if last_processed:
+            if last_processed.tzinfo is None:
+                last_processed = last_processed.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(timezone.utc) - last_processed).total_seconds()
+            if elapsed < MIN_PROCESS_INTERVAL:
+                logger.debug("Scheduler tick: too soon since last process",
+                             user_id=user_id, elapsed_sec=int(elapsed))
+                return
+
+        # 4. Проверяем нет ли уже поста в review
         review_items = await ContentQueueManager.get_items_for_review(user_id)
         if review_items:
-            return  # Ждём реакции
+            logger.info("Scheduler tick: waiting for review response",
+                        user_id=user_id, review_count=len(review_items))
+            return
 
-        if on_empty == "pause":
-            await AutoPublishManager.set_active(user_id, False)
-            try:
-                await bot.send_message(
-                    chat_id,
-                    "⚠️ Очередь постов пуста! Авто-публикация приостановлена.\n\n"
-                    "Сгенерируйте новый контент-план в разделе 📅 Авто-публикация."
-                )
-            except Exception:
-                pass
-        elif on_empty == "auto_generate":
-            await _auto_generate_batch(bot, user_id, settings)
-        return
+        # 5. Проверяем is_generating
+        if settings.get("is_generating"):
+            logger.info("Scheduler tick: content generation in progress",
+                        user_id=user_id)
+            return
 
-    # Есть ли уже пост в review?
-    review_items = await ContentQueueManager.get_items_for_review(user_id)
-    if review_items:
-        return  # Ждём реакции
+        # 6. Берём следующий ready пост
+        next_ready = await ContentQueueManager.get_next_ready(user_id)
+        if not next_ready:
+            # Очередь пуста — обработать on_empty
+            logger.info("Scheduler tick: queue empty",
+                        user_id=user_id, on_empty=on_empty)
+            await _handle_empty_queue(bot, user_id, chat_id, on_empty, settings)
+            # Обновляем last_processed_at
+            await AutoPublishManager.update_last_processed(user_id)
+            return
 
-    # Публикация или review
-    if moderation == "auto":
-        await _publish_queue_item(bot, next_ready, settings)
-    elif moderation == "review":
-        await _send_for_review(bot, next_ready, settings)
+        # 7. Публикация или review
+        if moderation == "auto":
+            logger.info("Scheduler tick: auto-publishing",
+                        user_id=user_id, queue_id=next_ready["id"],
+                        action="publish")
+            await _publish_queue_item(bot, next_ready, settings)
+        else:
+            logger.info("Scheduler tick: sending for review",
+                        user_id=user_id, queue_id=next_ready["id"],
+                        action="review")
+            await _send_for_review(bot, next_ready, settings)
+
+        # Обновляем last_processed_at
+        await AutoPublishManager.update_last_processed(user_id)
+
+    finally:
+        _processing_users.discard(user_id)
+
+
+async def _handle_empty_queue(bot: Bot, user_id: int, chat_id: int, on_empty: str, settings: dict):
+    """Обработка пустой очереди"""
+    if on_empty == "pause":
+        await AutoPublishManager.set_active(user_id, False)
+        try:
+            await bot.send_message(
+                chat_id,
+                "Очередь постов пуста! Авто-публикация приостановлена.\n\n"
+                "Сгенерируйте новый контент-план в разделе Авто-публикация."
+            )
+        except Exception:
+            pass
+    elif on_empty == "auto_generate":
+        await _auto_generate_batch(bot, user_id, settings)
 
 
 async def _send_for_review(bot: Bot, queue_item: dict, settings: dict):
@@ -166,7 +220,7 @@ async def _send_for_review(bot: Bot, queue_item: dict, settings: dict):
         else:
             await bot.send_message(chat_id, preview, reply_markup=kb, parse_mode="HTML")
     except Exception as e:
-        logger.error("❌ Failed to send review", queue_id=queue_id, error=str(e))
+        logger.error("Failed to send review", queue_id=queue_id, error=str(e))
 
 
 async def _publish_queue_item(bot: Bot, queue_item: dict, settings: dict):
@@ -188,7 +242,7 @@ async def _publish_queue_item(bot: Bot, queue_item: dict, settings: dict):
 
     channel = await ChannelManager.get_channel(user_id)
     if not channel:
-        logger.warning("⚠️ No channel for auto-publish", user_id=user_id)
+        logger.warning("No channel for auto-publish", user_id=user_id)
         return
 
     # Check post limit
@@ -197,8 +251,8 @@ async def _publish_queue_item(bot: Bot, queue_item: dict, settings: dict):
         try:
             await bot.send_message(
                 chat_id,
-                "⚠️ Достигнут лимит постов за месяц. Авто-публикация приостановлена.\n"
-                "Обновите тариф в разделе 💳 Подписка."
+                "Достигнут лимит постов за месяц. Авто-публикация приостановлена.\n"
+                "Обновите тариф в разделе Подписка."
             )
         except Exception:
             pass
@@ -237,10 +291,10 @@ async def _publish_queue_item(bot: Bot, queue_item: dict, settings: dict):
         except Exception:
             pass
 
-        logger.info("✅ Auto-published", queue_id=queue_id, post_id=post_id)
+        logger.info("Auto-published", queue_id=queue_id, post_id=post_id)
     else:
         error = result.get("error", "Unknown error")
-        logger.error("❌ Auto-publish failed", queue_id=queue_id, error=error)
+        logger.error("Auto-publish failed", queue_id=queue_id, error=error)
         try:
             await bot.send_message(
                 chat_id,
@@ -251,7 +305,7 @@ async def _publish_queue_item(bot: Bot, queue_item: dict, settings: dict):
 
 
 async def _send_review_reminders(bot: Bot):
-    """Повторная отправка постов на проверку каждые 30 минут"""
+    """Повторная отправка постов на проверку каждые 30 минут, максимум MAX_REVIEW_REMINDERS раз"""
     try:
         review_items = await ContentQueueManager.get_all_review_items()
     except Exception:
@@ -260,6 +314,25 @@ async def _send_review_reminders(bot: Bot):
     now = datetime.now(timezone.utc)
 
     for item in review_items:
+        reminders_sent = item.get("review_reminders_sent", 0)
+
+        # Автопропуск после MAX_REVIEW_REMINDERS напоминаний
+        if reminders_sent >= MAX_REVIEW_REMINDERS:
+            chat_id = item.get("chat_id")
+            queue_id = item["id"]
+            await ContentQueueManager.update_status(queue_id, "skipped")
+            logger.info("Auto-skipped review item after max reminders",
+                        queue_id=queue_id, reminders_sent=reminders_sent)
+            if chat_id:
+                try:
+                    await bot.send_message(
+                        chat_id,
+                        "⏭ Пост пропущен (нет ответа). Следующий — по расписанию."
+                    )
+                except Exception:
+                    pass
+            continue
+
         last_reminder = item.get("last_reminder_at")
         if not last_reminder:
             continue
@@ -284,7 +357,11 @@ async def _send_review_reminders(bot: Bot):
             continue
 
         text = post.get("final_text") or post.get("generated_text") or ""
-        preview = f"🔔 Напоминание: пост ждёт проверки!\n\n{sanitize_html(text)}"
+        remaining = MAX_REVIEW_REMINDERS - reminders_sent - 1
+        skip_warning = ""
+        if remaining <= 1:
+            skip_warning = "\n\n⚠️ Пост будет пропущен, если не ответить."
+        preview = f"🔔 Напоминание: пост ждёт проверки!{skip_warning}\n\n{sanitize_html(text)}"
 
         kb = review_post_kb(queue_id)
 
@@ -305,13 +382,20 @@ async def _send_review_reminders(bot: Bot):
                 await bot.send_message(chat_id, preview, reply_markup=kb, parse_mode="HTML")
 
             await ContentQueueManager.increment_reminder(queue_id)
+            logger.info("Review reminder sent",
+                        queue_id=queue_id, reminder_num=reminders_sent + 1)
         except Exception as e:
-            logger.error("❌ Review reminder failed", queue_id=queue_id, error=str(e))
+            logger.error("Review reminder failed", queue_id=queue_id, error=str(e))
 
 
 async def _auto_generate_batch(bot: Bot, user_id: int, settings: dict):
     """Автоматическая генерация нового контент-плана когда очередь пуста"""
     chat_id = settings["chat_id"]
+
+    # Проверяем флаг is_generating
+    if settings.get("is_generating"):
+        logger.info("Auto-generate skipped: already generating", user_id=user_id)
+        return
 
     agent = await AgentManager.get_agent(user_id)
     if not agent:
@@ -323,8 +407,8 @@ async def _auto_generate_batch(bot: Bot, user_id: int, settings: dict):
         try:
             await bot.send_message(
                 chat_id,
-                "⚠️ Закончились токены для авто-генерации. Авто-публикация приостановлена.\n"
-                "Докупите токены в разделе 💳 Подписка."
+                "Закончились токены для авто-генерации. Авто-публикация приостановлена.\n"
+                "Докупите токены в разделе Подписка."
             )
         except Exception:
             pass
@@ -332,6 +416,9 @@ async def _auto_generate_batch(bot: Bot, user_id: int, settings: dict):
 
     schedule = settings.get("schedule", {})
     generate_covers = settings.get("generate_covers", True)
+
+    # Устанавливаем флаг is_generating
+    await AutoPublishManager.set_generating(user_id, True)
 
     try:
         await generate_content_plan(
@@ -348,12 +435,16 @@ async def _auto_generate_batch(bot: Bot, user_id: int, settings: dict):
             await bot.send_message(
                 chat_id,
                 "🤖 Авто-генерация: новый контент-план создан!\n"
-                "Посмотреть в 📅 Авто-публикация → 📋 Контент-план"
+                "Посмотреть в Авто-публикация -> Контент-план"
             )
         except Exception:
             pass
+
+        logger.info("Auto-generate completed", user_id=user_id)
     except Exception as e:
-        logger.error("❌ Auto-generate failed", user_id=user_id, error=str(e))
+        logger.error("Auto-generate failed", user_id=user_id, error=str(e))
+    finally:
+        await AutoPublishManager.set_generating(user_id, False)
 
 
 def _has_photo(media_info: dict) -> bool:

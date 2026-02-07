@@ -6,7 +6,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from zoneinfo import ZoneInfo
 from aiogram import Bot
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.context import FSMContext
 
 from services import openai_service
 from services import image_service
@@ -140,13 +141,13 @@ async def generate_topics(
         input_tokens = response.usage.prompt_tokens if response.usage else 0
         output_tokens = response.usage.completion_tokens if response.usage else 0
 
-        logger.info("📋 Topics generated", count=len(topics),
+        logger.info("Topics generated", count=len(topics),
                      input_tokens=input_tokens, output_tokens=output_tokens)
 
         return topics, input_tokens + output_tokens
 
     except Exception as e:
-        logger.error("❌ Topic generation failed", error=str(e))
+        logger.error("Topic generation failed", error=str(e))
         return [], 0
 
 
@@ -184,8 +185,19 @@ async def generate_cover_for_post(
         )
         return image_result
     except Exception as e:
-        logger.error("❌ Cover generation failed", error=str(e))
+        logger.error("Cover generation failed", error=str(e))
         return None
+
+
+async def _is_user_in_content_plan_menu(state: Optional[FSMContext]) -> bool:
+    """Проверить, находится ли пользователь в меню контент-плана"""
+    if not state:
+        return False
+    try:
+        current_state = await state.get_state()
+        return current_state is not None and "ContentPlan" in str(current_state)
+    except Exception:
+        return False
 
 
 async def generate_content_plan(
@@ -197,6 +209,7 @@ async def generate_content_plan(
     schedule: dict,
     generate_covers: bool,
     status_message: Message = None,
+    state: FSMContext = None,
 ) -> List[Dict]:
     """
     Полная генерация контент-плана:
@@ -211,13 +224,29 @@ async def generate_content_plan(
     if posts_count == 0:
         return []
 
+    # Учитываем лимит очереди
+    from utils.plan_utils import get_auto_publish_limits
+    user = await UserManager.get_by_chat_id(chat_id)
+    plan = user.get("plan", "free") if user else "free"
+    limits = get_auto_publish_limits(plan)
+    existing_count = await ContentQueueManager.get_active_queue_count(user_id)
+    max_size = limits.get("max_queue_size", 50)
+    available_slots = max_size - existing_count
+    if available_slots <= 0:
+        logger.info("Queue full, skipping generation",
+                    user_id=user_id, existing=existing_count, max=max_size)
+        return []
+    posts_count = min(posts_count, available_slots)
+
     # 2. Рассчитываем даты
     schedule_times = calculate_schedule_times(schedule, posts_count)
 
     total_tokens_spent = 0
 
     # 3. Генерируем темы
-    if status_message:
+    user_in_menu = await _is_user_in_content_plan_menu(state)
+
+    if user_in_menu and status_message:
         try:
             await status_message.edit_text(
                 "⏳ Генерирую контент-план...\n\n"
@@ -246,8 +275,10 @@ async def generate_content_plan(
         topic = topic_item.get("topic", "")
         fmt = topic_item.get("format", "обзор")
 
-        # Update progress before generating each post
-        if status_message:
+        # Проверяем: пользователь ещё в меню?
+        user_in_menu = await _is_user_in_content_plan_menu(state)
+
+        if user_in_menu and status_message:
             try:
                 covers_status = f"{covers_done}/{len(topics)} ⏳" if generate_covers else "выкл"
                 await status_message.edit_text(
@@ -267,7 +298,7 @@ async def generate_content_plan(
         )
 
         if not result.get("success"):
-            logger.error("❌ Post generation failed for topic", topic=topic[:50])
+            logger.error("Post generation failed for topic", topic=topic[:50])
             continue
 
         post_text = result["text"]
@@ -287,7 +318,8 @@ async def generate_content_plan(
 
         # Generate cover if enabled
         if generate_covers:
-            if status_message:
+            user_in_menu = await _is_user_in_content_plan_menu(state)
+            if user_in_menu and status_message:
                 try:
                     await status_message.edit_text(
                         "⏳ Генерирую контент-план...\n\n"
@@ -315,7 +347,7 @@ async def generate_content_plan(
     # 5. Save to content_queue
     if queue_items:
         saved = await ContentQueueManager.add_items_batch(user_id, queue_items)
-        logger.info("✅ Content plan generated",
+        logger.info("Content plan generated",
                      user_id=user_id, posts=len(saved),
                      tokens_spent=total_tokens_spent)
         return saved

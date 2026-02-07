@@ -169,6 +169,41 @@ async def _create_tables():
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
         
+        -- Настройки авто-публикации
+        CREATE TABLE IF NOT EXISTS auto_publish_settings (
+            id SERIAL PRIMARY KEY,
+            user_id INT REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+            is_active BOOLEAN DEFAULT FALSE,
+            schedule JSONB DEFAULT '{}'::jsonb,
+            moderation VARCHAR(20) DEFAULT 'review',
+            generate_covers BOOLEAN DEFAULT TRUE,
+            on_empty VARCHAR(20) DEFAULT 'pause',
+            timezone VARCHAR(50) DEFAULT 'Europe/Moscow',
+            is_generating BOOLEAN DEFAULT FALSE,
+            last_processed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        -- Очередь контент-плана
+        CREATE TABLE IF NOT EXISTS content_queue (
+            id SERIAL PRIMARY KEY,
+            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            topic TEXT,
+            format VARCHAR(50),
+            post_id INT REFERENCES posts(id) ON DELETE SET NULL,
+            position INT DEFAULT 0,
+            scheduled_at TIMESTAMPTZ,
+            status VARCHAR(20) DEFAULT 'pending',
+            review_reminders_sent INT DEFAULT 0,
+            last_reminder_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        -- Добавить новые колонки в auto_publish_settings если их нет
+        ALTER TABLE auto_publish_settings ADD COLUMN IF NOT EXISTS is_generating BOOLEAN DEFAULT FALSE;
+        ALTER TABLE auto_publish_settings ADD COLUMN IF NOT EXISTS last_processed_at TIMESTAMPTZ;
+
         -- Индексы
         CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users(chat_id);
         CREATE INDEX IF NOT EXISTS idx_channels_user_id ON channels(user_id);
@@ -180,6 +215,9 @@ async def _create_tables():
         CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id);
         CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
         CREATE INDEX IF NOT EXISTS idx_token_usage_user_id ON token_usage(user_id);
+        CREATE INDEX IF NOT EXISTS idx_auto_publish_user_id ON auto_publish_settings(user_id);
+        CREATE INDEX IF NOT EXISTS idx_content_queue_user_id ON content_queue(user_id);
+        CREATE INDEX IF NOT EXISTS idx_content_queue_status ON content_queue(status);
 
         """)
         logger.info("✅ Database tables created/verified")

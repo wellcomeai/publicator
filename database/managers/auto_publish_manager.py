@@ -170,6 +170,28 @@ class AutoPublishManager:
             return None
 
     @staticmethod
+    async def update_last_processed(user_id: int):
+        """Обновить время последней обработки"""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE auto_publish_settings
+                SET last_processed_at = NOW()
+                WHERE user_id = $1
+            """, user_id)
+
+    @staticmethod
+    async def set_generating(user_id: int, generating: bool):
+        """Установить флаг is_generating"""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE auto_publish_settings
+                SET is_generating = $2, updated_at = NOW()
+                WHERE user_id = $1
+            """, user_id, generating)
+
+    @staticmethod
     async def get_active_settings() -> List[Dict[str, Any]]:
         """Все активные настройки (для планировщика)"""
         pool = await get_pool()
