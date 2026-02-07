@@ -109,7 +109,7 @@ async def _show_auto_publish_menu(message_or_cb, user: dict, edit: bool = False)
             if scheduled_at:
                 tz = ZoneInfo("Europe/Moscow")
                 dt = scheduled_at.astimezone(tz) if scheduled_at.tzinfo else scheduled_at
-                next_text = f"\n   Следующий: {dt.strftime('%a %H:%M')} — «{topic}»"
+                next_text = f"\n   Следующий: {dt.strftime('%d.%m.%Y %H:%M')} МСК — «{topic}»"
 
     mod_text = "👀 На проверку" if moderation == "review" else "📢 Автоматически"
     covers_text = "Да" if generate_covers else "Нет"
@@ -335,6 +335,7 @@ async def on_times_done(callback: CallbackQuery, state: FSMContext):
     # Recalculate scheduled_at for existing queue
     await ContentQueueManager.recalculate_scheduled_at(user["id"], schedule)
 
+    auto_activate = data.get("auto_activate_after", False)
     await state.clear()
 
     # Format confirmation
@@ -343,15 +344,55 @@ async def on_times_done(callback: CallbackQuery, state: FSMContext):
     times_text = ", ".join(selected_times)
     total_per_week = len(selected_days) * len(selected_times)
 
-    await callback.message.edit_text(
-        f"✅ Расписание сохранено!\n\n"
-        f"📅 Дни: {days_text}\n"
-        f"⏰ Время: {times_text}\n"
-        f"= {total_per_week} постов в неделю",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")]
-        ]),
-    )
+    if auto_activate:
+        # Проверяем остальные условия для автоматического включения
+        channel = await ChannelManager.get_channel(user["id"])
+        agent = await AgentManager.get_agent(user["id"])
+        ready_count = await ContentQueueManager.get_queue_count(user["id"], status="ready")
+        settings_check = await AutoPublishManager.get_settings(user["id"])
+        on_empty = settings_check.get("on_empty", "pause") if settings_check else "pause"
+
+        if channel and agent and (ready_count > 0 or on_empty == "auto_generate"):
+            await AutoPublishManager.set_active(user["id"], True)
+            await callback.message.edit_text(
+                f"✅ Расписание сохранено!\n\n"
+                f"📅 Дни: {days_text}\n"
+                f"⏰ Время: {times_text}\n"
+                f"= {total_per_week} постов в неделю\n\n"
+                f"▶️ Авто-публикация включена!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")]
+                ]),
+            )
+        else:
+            missing = []
+            if not channel:
+                missing.append("привязать канал (📢 Мой канал)")
+            if not agent:
+                missing.append("создать агента (🤖 Мой агент)")
+            if ready_count == 0 and on_empty != "auto_generate":
+                missing.append("сгенерировать контент-план")
+            missing_text = "\n".join(f"• {m}" for m in missing)
+            await callback.message.edit_text(
+                f"✅ Расписание сохранено!\n\n"
+                f"📅 Дни: {days_text}\n"
+                f"⏰ Время: {times_text}\n"
+                f"= {total_per_week} постов в неделю\n\n"
+                f"⚠️ Для включения авто-публикации нужно:\n{missing_text}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")]
+                ]),
+            )
+    else:
+        await callback.message.edit_text(
+            f"✅ Расписание сохранено!\n\n"
+            f"📅 Дни: {days_text}\n"
+            f"⏰ Время: {times_text}\n"
+            f"= {total_per_week} постов в неделю",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="autopub:menu")]
+            ]),
+        )
     await callback.answer()
 
 
@@ -498,7 +539,17 @@ async def toggle_auto_publish(callback: CallbackQuery, state: FSMContext):
     # Activate — run checks
     schedule = settings.get("schedule", {})
     if not schedule.get("slots"):
-        await callback.answer("⚠️ Сначала настройте расписание", show_alert=True)
+        await callback.answer()
+
+        # Автоматически начинаем настройку расписания
+        await state.set_state(AutoPublishSetup.choosing_days)
+        await state.update_data(selected_days=[], auto_activate_after=True)
+
+        await callback.message.edit_text(
+            "⚠️ Сначала настройте расписание!\n\n"
+            "Выберите дни публикаций:",
+            reply_markup=schedule_days_kb([]),
+        )
         return
 
     channel = await ChannelManager.get_channel(user_id)
@@ -526,33 +577,11 @@ async def toggle_auto_publish(callback: CallbackQuery, state: FSMContext):
     # Get next slot time
     next_slot = await AutoPublishManager.get_next_slot_time(user_id)
 
-    if ready_count == 0 and on_empty == "auto_generate":
-        # Включаем с авто-генерацией, без контент-плана
-        if next_slot:
-            tz = ZoneInfo("Europe/Moscow")
-            next_msk = next_slot.astimezone(tz)
-            msg = (
-                f"✅ Авто-публикация включена!\n\n"
-                f"🤖 Режим: авто-генерация\n"
-                f"Бот будет сам создавать посты по промту вашего агента в назначенное время.\n\n"
-                f"Следующий пост: {next_msk.strftime('%a %d.%m %H:%M')} МСК"
-            )
-        else:
-            msg = (
-                "✅ Авто-публикация включена!\n\n"
-                "🤖 Режим: авто-генерация\n"
-                "Бот будет сам создавать посты по промту вашего агента в назначенное время."
-            )
-        try:
-            await callback.message.answer(msg)
-        except Exception:
-            pass
-        await callback.answer()
-    elif next_slot:
+    if next_slot:
         tz = ZoneInfo("Europe/Moscow")
         next_msk = next_slot.astimezone(tz)
         await callback.answer(
-            f"▶️ Включена! Следующий пост: {next_msk.strftime('%a %d.%m %H:%M')} МСК",
+            f"▶️ Включена! Следующий пост: {next_msk.strftime('%d.%m.%Y %H:%M')} МСК",
             show_alert=True,
         )
     else:
@@ -568,40 +597,36 @@ async def toggle_auto_publish(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("review_publish:"))
 async def review_publish(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Опубликовать пост из review"""
+    await callback.answer()
+
     queue_id = int(callback.data.split(":")[1])
     chat_id = callback.from_user.id
 
     item = await ContentQueueManager.get_item(queue_id)
     if not item:
-        await callback.answer("Пост не найден", show_alert=True)
         return
 
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
-        await callback.answer("Ошибка", show_alert=True)
         return
 
     user_id = user["id"]
     post_id = item.get("post_id")
 
     if not post_id:
-        await callback.answer("Пост не найден", show_alert=True)
         return
 
     post = await PostManager.get_post(post_id)
     if not post:
-        await callback.answer("Пост не найден", show_alert=True)
         return
 
     channel = await ChannelManager.get_channel(user_id)
     if not channel:
-        await callback.answer("⚠️ Канал не привязан", show_alert=True)
         return
 
     # Check post limit
     limit_info = await UserManager.check_post_limit(chat_id)
     if not limit_info.get("can_post"):
-        await callback.answer("⚠️ Достигнут лимит постов за месяц", show_alert=True)
         return
 
     text = post.get("final_text") or post.get("generated_text") or ""
@@ -632,10 +657,12 @@ async def review_publish(callback: CallbackQuery, state: FSMContext, bot: Bot):
             )
         except Exception:
             pass
-        await callback.answer("✅ Опубликовано!")
     else:
         error = result.get("error", "Unknown error")
-        await callback.answer(f"❌ Ошибка: {error}", show_alert=True)
+        try:
+            await callback.message.edit_text(f"❌ Ошибка публикации: {error}")
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data.startswith("review_edit:"))

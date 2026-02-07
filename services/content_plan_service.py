@@ -81,6 +81,7 @@ def calculate_schedule_times(schedule: dict, count: int, start_from: datetime = 
 
         current_date += timedelta(weeks=1)
 
+    result.sort()
     return result[:count]
 
 
@@ -240,14 +241,15 @@ async def generate_content_plan(
 
     # 4. Генерируем посты по каждой теме
     queue_items = []
+    covers_done = 0
     for i, topic_item in enumerate(topics):
         topic = topic_item.get("topic", "")
         fmt = topic_item.get("format", "обзор")
 
-        # Update progress
-        if status_message and i % 2 == 0:
+        # Update progress before generating each post
+        if status_message:
             try:
-                covers_status = "⏳" if generate_covers else "выкл"
+                covers_status = f"{covers_done}/{len(topics)} ⏳" if generate_covers else "выкл"
                 await status_message.edit_text(
                     "⏳ Генерирую контент-план...\n\n"
                     f"📝 Посты: {i}/{len(topics)} ⏳\n"
@@ -285,12 +287,12 @@ async def generate_content_plan(
 
         # Generate cover if enabled
         if generate_covers:
-            if status_message and i % 2 == 0:
+            if status_message:
                 try:
                     await status_message.edit_text(
                         "⏳ Генерирую контент-план...\n\n"
                         f"📝 Посты: {i + 1}/{len(topics)} ✅\n"
-                        f"🖼 Обложки: {i}/{len(topics)} ⏳"
+                        f"🖼 Обложки: {covers_done}/{len(topics)} ⏳"
                     )
                 except Exception:
                     pass
@@ -298,6 +300,7 @@ async def generate_content_plan(
             cover = await generate_cover_for_post(post_text, bot, chat_id)
             if cover:
                 await PostMediaManager.add_media_item(post_id, cover)
+                covers_done += 1
 
         scheduled_at = schedule_times[i] if i < len(schedule_times) else None
 

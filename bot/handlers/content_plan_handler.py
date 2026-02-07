@@ -80,7 +80,7 @@ def format_carousel_caption(queue_item: dict, post: dict, position: int, total: 
             msk = scheduled_at.astimezone(tz)
         else:
             msk = scheduled_at
-        date_str = msk.strftime("%a, %d.%m — %H:%M МСК")
+        date_str = msk.strftime("%d.%m.%Y — %H:%M МСК")
     else:
         date_str = "не назначено"
 
@@ -198,12 +198,13 @@ async def generate_plan_start(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cplan_gen:"))
 async def generate_plan_execute(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Запуск генерации плана"""
+    await callback.answer()
+
     with_covers = callback.data == "cplan_gen:with_covers"
     chat_id = callback.from_user.id
 
     user = await UserManager.get_by_chat_id(chat_id)
     if not user:
-        await callback.answer("Ошибка", show_alert=True)
         return
 
     user_id = user["id"]
@@ -211,7 +212,6 @@ async def generate_plan_execute(callback: CallbackQuery, state: FSMContext, bot:
     settings = await AutoPublishManager.get_settings(user_id)
 
     if not agent or not settings:
-        await callback.answer("Ошибка конфигурации", show_alert=True)
         return
 
     schedule = settings.get("schedule", {})
@@ -257,8 +257,6 @@ async def generate_plan_execute(callback: CallbackQuery, state: FSMContext, bot:
             )
         except Exception:
             pass
-
-    await callback.answer()
 
 
 # ============================================================
@@ -428,7 +426,7 @@ async def process_add_topic(message: Message, state: FSMContext, bot: Bot):
     if scheduled_at:
         tz = ZoneInfo("Europe/Moscow")
         dt = scheduled_at.astimezone(tz)
-        date_str = f"\n📅 Запланировано: {dt.strftime('%a %d.%m %H:%M')} МСК"
+        date_str = f"\n📅 Запланировано: {dt.strftime('%d.%m.%Y %H:%M')} МСК"
 
     await status_msg.edit_text(
         f"✅ Тема добавлена в очередь! (позиция #{position})"
@@ -743,12 +741,13 @@ async def process_edit_text(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data.startswith("cplan_textedit:regen:"))
 async def regen_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Перегенерировать пост"""
+    await callback.answer()
+
     queue_id = int(callback.data.split(":")[2])
     chat_id = callback.from_user.id
 
     item = await ContentQueueManager.get_item(queue_id)
     if not item:
-        await callback.answer("Пост не найден", show_alert=True)
         return
 
     user = await UserManager.get_by_chat_id(chat_id)
@@ -796,7 +795,6 @@ async def regen_post(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     await state.set_state(ContentPlan.browsing_queue)
     await _show_carousel_item(chat_id, state, pos, user_id, bot)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("cplan_textedit:newtopic:"))
@@ -923,12 +921,13 @@ async def cover_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cplan_cover_auto:"))
 async def cover_auto_generate(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Авто-генерация обложки"""
+    await callback.answer()
+
     queue_id = int(callback.data.split(":")[1])
     chat_id = callback.from_user.id
 
     item = await ContentQueueManager.get_item(queue_id)
     if not item or not item.get("post_id"):
-        await callback.answer("Пост не найден", show_alert=True)
         return
 
     post = await PostManager.get_post(item["post_id"])
@@ -957,7 +956,6 @@ async def cover_auto_generate(callback: CallbackQuery, state: FSMContext, bot: B
 
     await state.set_state(ContentPlan.browsing_queue)
     await _show_carousel_item(chat_id, state, pos, user_id, bot)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("cplan_cover_prompt:"))

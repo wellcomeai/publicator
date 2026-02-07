@@ -141,7 +141,7 @@ async def _send_for_review(bot: Bot, queue_item: dict, settings: dict):
     if scheduled_at:
         tz = ZoneInfo(settings.get("timezone", "Europe/Moscow"))
         msk = scheduled_at.astimezone(tz) if scheduled_at.tzinfo else scheduled_at
-        date_str = f"\n📅 Запланировано: {msk.strftime('%a %d.%m — %H:%M')} МСК"
+        date_str = f"\n📅 Запланировано: {msk.strftime('%d.%m.%Y — %H:%M')} МСК"
 
     preview = (
         f"👀 Пост готов к проверке!{date_str}\n\n"
