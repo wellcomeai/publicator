@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from database.managers.user_manager import UserManager
 from database.managers.agent_manager import AgentManager
 from bot.keyboards.keyboards import main_menu_kb
-from utils.plan_utils import plan_allows_schedule, plan_allows_watcher
+from utils.plan_utils import plan_allows_schedule
 
 router = Router()
 
@@ -57,5 +57,4 @@ async def cmd_start(message: Message, state: FSMContext):
 
     plan = access.get("plan", "free")
     show_schedule = plan_allows_schedule(plan)
-    show_watcher = plan_allows_watcher(plan)
-    await message.answer(text, reply_markup=main_menu_kb(show_schedule=show_schedule, show_watcher=show_watcher), parse_mode="HTML")
+    await message.answer(text, reply_markup=main_menu_kb(show_schedule=show_schedule), parse_mode="HTML")

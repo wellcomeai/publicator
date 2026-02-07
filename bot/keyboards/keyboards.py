@@ -8,8 +8,8 @@ from aiogram.types import (
 
 # ===== ГЛАВНОЕ МЕНЮ =====
 
-def main_menu_kb(show_schedule: bool = False, show_watcher: bool = False) -> ReplyKeyboardMarkup:
-    """Главное меню. show_schedule для Про, show_watcher для Стартер/Про."""
+def main_menu_kb(show_schedule: bool = False) -> ReplyKeyboardMarkup:
+    """Главное меню. show_schedule для Про."""
     keyboard = [
         [KeyboardButton(text="✍️ Создать пост"), KeyboardButton(text="🔄 Рерайт поста")],
         [KeyboardButton(text="🤖 Мой агент"), KeyboardButton(text="📢 Мой канал")],
@@ -18,8 +18,6 @@ def main_menu_kb(show_schedule: bool = False, show_watcher: bool = False) -> Rep
     row3 = []
     if show_schedule:
         row3.append(KeyboardButton(text="📅 Расписание"))
-    if show_watcher:
-        row3.append(KeyboardButton(text="📡 Источники"))
     row3.append(KeyboardButton(text="👤 Профиль"))
     keyboard.append(row3)
 
@@ -235,40 +233,6 @@ def scheduled_list_kb(scheduled_items: list) -> InlineKeyboardMarkup:
             callback_data=f"sched_cancel:{item['id']}"
         )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-# ===== ИСТОЧНИКИ (WATCHER) =====
-
-def watcher_menu_kb(channels: list, can_add: bool = True) -> InlineKeyboardMarkup:
-    """Меню управления каналами-источниками"""
-    buttons = []
-
-    if can_add:
-        buttons.append([InlineKeyboardButton(text="➕ Добавить канал", callback_data="watcher:add")])
-
-    for ch in channels:
-        buttons.append([InlineKeyboardButton(
-            text=f"❌ Удалить @{ch['channel_username']}",
-            callback_data=f"watcher:remove:{ch['id']}"
-        )])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def watcher_post_kb(watched_channel_id: int, post_id: int) -> InlineKeyboardMarkup:
-    """Кнопки под уведомлением о новом посте"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="🔄 Рерайт",
-                callback_data=f"watcher_rewrite:{watched_channel_id}:{post_id}"
-            ),
-            InlineKeyboardButton(
-                text="⏭ Пропустить",
-                callback_data=f"watcher_skip:{watched_channel_id}:{post_id}"
-            ),
-        ]
-    ])
 
 
 # ===== ОТМЕНА =====

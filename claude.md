@@ -21,12 +21,12 @@ Telegram SaaS-бот для создания и публикации конте�
 ### Слой бота (`bot/`)
 - `handlers/` — aiogram Router-хэндлеры, каждый в своём файле
 - `keyboards/keyboards.py` — все клавиатуры (ReplyKeyboard + InlineKeyboard)
-- `states/states.py` — FSM StatesGroup (AgentSetup, ChannelLink, ContentGeneration, RewritePost, Onboarding, SchedulePost, MediaManagement, WatcherSetup)
+- `states/states.py` — FSM StatesGroup (AgentSetup, ChannelLink, ContentGeneration, RewritePost, Onboarding, SchedulePost, MediaManagement)
 - `middlewares/` — AlbumMiddleware для передачи собранных медиагрупп в хэндлеры
 
 ### Слой данных (`database/`)
 - `db.py` — asyncpg pool, `_create_tables()` создаёт схему при старте
-- `managers/` — статические классы-менеджеры (UserManager, AgentManager, ChannelManager, PostManager, PaymentManager, ScheduleManager, UserSettingsManager, WatcherManager)
+- `managers/` — статические классы-менеджеры (UserManager, AgentManager, ChannelManager, PostManager, PaymentManager, ScheduleManager, UserSettingsManager)
 - Все менеджеры используют `get_pool()` и возвращают `Dict[str, Any]`
 
 ### Сервисный слой (`services/`)
@@ -38,8 +38,6 @@ Telegram SaaS-бот для создания и публикации конте�
 - `whisper_service.py` — транскрипция голосовых через Whisper API
 - `url_extractor.py` — извлечение текста из URL (httpx + BeautifulSoup)
 - `scheduler_service.py` — фоновый цикл: каждые 60 сек проверяет scheduled_posts и публикует
-- `channel_watcher.py` — парсинг публичных каналов через t.me/s/ для мониторинга новых постов
-- `watcher_scheduler.py` — фоновый цикл: каждые 5 мин проверяет отслеживаемые каналы
 
 ### Утилиты (`utils/`)
 - `media.py` — extract_media_info, extract_links, get_text
@@ -60,11 +58,11 @@ GPT генерирует посты до **900 символов** (запас ~1
 
 ## Freemium модель
 - **free**: 5 постов/мес, текст + фото, водяной знак, 100K токенов при регистрации
-- **starter** (100₽/мес): 15 постов/мес, без водяного знака, 1 канал-источник
-- **pro** (300₽/мес): безлимит, видео, расписание, аналитика, 3 канала-источника
+- **starter** (100₽/мес): 15 постов/мес, без водяного знака
+- **pro** (300₽/мес): безлимит, видео, расписание, аналитика
 
 ## Схема БД
-Таблицы: users, channels, agents, posts, scheduled_posts, payments, token_usage, user_settings, watched_channels, watched_posts_log.
+Таблицы: users, channels, agents, posts, scheduled_posts, payments, token_usage, user_settings.
 Все создаются в `database/db.py → _create_tables()`.
 
 ## Паттерны кода

@@ -169,31 +169,6 @@ async def _create_tables():
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
         
-        -- Отслеживаемые каналы-источники
-        CREATE TABLE IF NOT EXISTS watched_channels (
-            id SERIAL PRIMARY KEY,
-            user_id INT REFERENCES users(id) ON DELETE CASCADE,
-            channel_username VARCHAR(255) NOT NULL,
-            channel_title VARCHAR(255),
-            is_active BOOLEAN DEFAULT TRUE,
-            last_checked_post_id INT DEFAULT 0,
-            last_checked_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_watched_unique
-            ON watched_channels(user_id, channel_username);
-
-        -- Лог отправленных постов из каналов-источников
-        CREATE TABLE IF NOT EXISTS watched_posts_log (
-            id SERIAL PRIMARY KEY,
-            watched_channel_id INT REFERENCES watched_channels(id) ON DELETE CASCADE,
-            post_id INT NOT NULL,
-            was_rewritten BOOLEAN DEFAULT FALSE,
-            sent_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(watched_channel_id, post_id)
-        );
-
         -- Индексы
         CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users(chat_id);
         CREATE INDEX IF NOT EXISTS idx_channels_user_id ON channels(user_id);
@@ -205,9 +180,6 @@ async def _create_tables():
         CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id);
         CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
         CREATE INDEX IF NOT EXISTS idx_token_usage_user_id ON token_usage(user_id);
-        CREATE INDEX IF NOT EXISTS idx_watched_channels_user ON watched_channels(user_id);
-        CREATE INDEX IF NOT EXISTS idx_watched_channels_active ON watched_channels(is_active);
-        CREATE INDEX IF NOT EXISTS idx_watched_posts_log_channel ON watched_posts_log(watched_channel_id);
 
         """)
         logger.info("✅ Database tables created/verified")
