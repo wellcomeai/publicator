@@ -32,7 +32,7 @@ from bot.handlers import (
     watcher_handler,
 )
 from services.scheduler_service import run_scheduler
-from services.watcher_scheduler import run_watcher
+from services.watcher_scheduler import run_watcher, watcher_status, CHECK_INTERVAL_SECONDS
 from bot.middlewares import AlbumMiddleware
 
 logger = structlog.get_logger()
@@ -233,6 +233,23 @@ async def robokassa_success(request: Request):
 @app.get("/robokassa/fail")
 async def robokassa_fail(request: Request):
     return Response(content="<h1>❌ Оплата отменена</h1><p>Вернитесь в бота и попробуйте снова.</p>", media_type="text/html")
+
+
+# ===== WATCHER STATUS =====
+
+@app.get("/watcher/status")
+async def get_watcher_status():
+    return {
+        "last_run_at": watcher_status.last_run_at.isoformat() if watcher_status.last_run_at else None,
+        "last_run_duration_sec": watcher_status.last_run_duration_sec,
+        "cycles_count": watcher_status.cycles_count,
+        "channels_checked": watcher_status.total_channels_checked,
+        "new_posts_found": watcher_status.total_new_posts_found,
+        "posts_sent": watcher_status.total_posts_sent,
+        "errors": watcher_status.errors,
+        "channels_detail": watcher_status.channels_detail,
+        "interval_sec": CHECK_INTERVAL_SECONDS,
+    }
 
 
 # ===== HEALTHCHECK =====
